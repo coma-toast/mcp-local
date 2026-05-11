@@ -1,0 +1,17 @@
+# Append this block to `services:` in ~/.mcp-local/config.yaml (keep list indentation aligned).
+# ONNXRUNTIME_LIB: Apple Silicon Homebrew → /opt/homebrew/lib/libonnxruntime.dylib;
+# Intel macOS → /usr/local/lib/libonnxruntime.dylib often; Linux → see ast-context-cache Makefile.
+- name: ast-context-cache
+  command: ${HOME}/git/ast-context-cache/ast-mcp
+  port: 7821
+  type: http
+  mcp_url: http://localhost:7821/mcp
+  health_url: http://localhost:7821/health
+  dashboard_url: http://localhost:7830
+  log: ${HOME}/.mcp-local/ast-context-cache.log
+  description: ast-context-cache MCP (7821) + dashboard (7830)
+  env:
+    ONNXRUNTIME_LIB: /opt/homebrew/lib/libonnxruntime.dylib
+  build_command: "cd ${HOME}/git/ast-context-cache && make build"
+  deps:
+    - ${HOME}/git/ast-context-cache/model/model.onnx

@@ -61,7 +61,9 @@ make          # writes ./bin/mcp-local
 Add `./bin` to your PATH (e.g. Fish: `fish_add_path -m ~/git/mcp-local/bin` after first build).
 
 ### Configuration
-Create your config at `~/.mcp-local/config.yaml`:
+Create your config at `~/.mcp-local/config.yaml`.
+
+**ast-context-cache:** use the ready-made starter ([`examples/config.starter.yaml`](examples/config.starter.yaml)) or merge the service fragment from [`examples/ast-context-cache.service.yaml`](examples/ast-context-cache.service.yaml). Adjust `ONNXRUNTIME_LIB` if needed (Apple Silicon Homebrew: `/opt/homebrew/lib/libonnxruntime.dylib`; Intel macOS often `/usr/local/lib/libonnxruntime.dylib`).
 
 ```yaml
 services:
@@ -69,9 +71,13 @@ services:
     command: ${HOME}/git/ast-context-cache/ast-mcp
     port: 7821
     type: http
+    mcp_url: http://localhost:7821/mcp
+    health_url: http://localhost:7821/health
+    dashboard_url: http://localhost:7830
+    log: ${HOME}/.mcp-local/ast-context-cache.log
     env:
-      ONNXRUNTIME_LIB: /usr/local/lib/libonnxruntime.dylib
-    build_cmd: "cd ${HOME}/git/ast-context-cache && make build"
+      ONNXRUNTIME_LIB: /opt/homebrew/lib/libonnxruntime.dylib
+    build_command: "cd ${HOME}/git/ast-context-cache && make build"
     deps:
       - ${HOME}/git/ast-context-cache/model/model.onnx
 
