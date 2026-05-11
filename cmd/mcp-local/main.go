@@ -5,12 +5,14 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
 	"github.com/coma-toast/mcp-local/internal/mgr/logs"
 	"github.com/coma-toast/mcp-local/internal/mgr/opencode"
 	"github.com/coma-toast/mcp-local/internal/mgr/process"
+	"github.com/coma-toast/mcp-local/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -38,14 +40,31 @@ func main() {
 	}
 }
 
+func ensureConfig() (*config.ManagerConfig, error) {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		fmt.Println("⚠️  Configuration file missing or corrupt. Launching setup wizard...")
+		wizardCfg, err := tui.RunConfigWizard()
+		if err != nil {
+			return nil, fmt.Errorf("config wizard failed: %v", err)
+		}
+		if err := config.SaveConfig(wizardCfg); err != nil {
+			return nil, fmt.Errorf("failed to save wizard config: %v", err)
+		}
+		fmt.Println("✅ Configuration saved successfully!")
+		return wizardCfg, nil
+	}
+	return cfg, nil
+}
+
 func startCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "start",
 		Short: "Start all configured MCP servers",
 		Run: func(cmd *cobra.Command, args []string) {
-			cfg, err := config.LoadConfig()
+			cfg, err := ensureConfig()
 			if err != nil {
-				log.Fatalf("Failed to load config: %v", err)
+				log.Fatalf("Error: %v", err)
 			}
 
 			fmt.Println("🚀 Starting MCP servers...")
@@ -78,9 +97,9 @@ func stopCmd() *cobra.Command {
 		Use:   "stop",
 		Short: "Stop all managed MCP servers",
 		Run: func(cmd *cobra.Command, args []string) {
-			cfg, err := config.LoadConfig()
+			cfg, err := ensureConfig()
 			if err != nil {
-				log.Fatalf("Failed to load config: %v", err)
+				log.Fatalf("Error: %v", err)
 			}
 
 			fmt.Println("⏹️  Stopping MCP servers...")
@@ -119,9 +138,9 @@ func statusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show status of all managed services",
 		Run: func(cmd *cobra.Command, args []string) {
-			cfg, err := config.LoadConfig()
+			cfg, err := ensureConfig()
 			if err != nil {
-				log.Fatalf("Failed to load config: %v", err)
+				log.Fatalf("Error: %v", err)
 			}
 
 			fmt.Printf("%-20s %-10s %-10s\n", "SERVICE", "STATUS", "PID")
@@ -154,9 +173,9 @@ func healthCmd() *cobra.Command {
 		Use:   "health",
 		Short: "Check health of all HTTP services",
 		Run: func(cmd *cobra.Command, args []string) {
-			cfg, err := config.LoadConfig()
+			cfg, err := ensureConfig()
 			if err != nil {
-				log.Fatalf("Failed to load config: %v", err)
+				log.Fatalf("Error: %v", err)
 			}
 
 			for _, s := range cfg.Services {
@@ -177,9 +196,9 @@ func rebuildCmd() *cobra.Command {
 		Use:   "rebuild",
 		Short: "Rebuild and restart all services",
 		Run: func(cmd *cobra.Command, args []string) {
-			cfg, err := config.LoadConfig()
+			cfg, err := ensureConfig()
 			if err != nil {
-				log.Fatalf("Failed to load config: %v", err)
+				log.Fatalf("Error: %v", err)
 			}
 
 			for _, s := range cfg.Services {
@@ -209,9 +228,9 @@ func logsCmd() *cobra.Command {
 		Use:   "logs",
 		Short: "Tail unified logs for all services",
 		Run: func(cmd *cobra.Command, args []string) {
-			cfg, err := config.LoadConfig()
+			cfg, err := ensureConfig()
 			if err != nil {
-				log.Fatalf("Failed to load config: %v", err)
+				log.Fatalf("Error: %v", err)
 			}
 
 			var names []string
@@ -238,10 +257,14 @@ func toolsCmd() *cobra.Command {
 		Use:   "tools",
 		Short: "Manage tool availability and tiers (TUI)",
 		Run: func(cmd *cobra.Command, args []string) {
-			// We'll call the tool-mgr logic here
-			// For now, we can just exec the tool-mgr binary if it exists
-			fmt.Println("Launching Tool Manager TUI...")
-			// Logic to launch the bubbletea app
+			cfg, err := ensureConfig()
+			if err != nil {
+				log.Fatalf("Error: %v", err)
+			}
+			if err := tui.RunToolManager(cfg); err != nil {
+				fmt.Printf("Error: %v\n", err)
+				os.Exit(1)
+			}
 		},
 	}
 }

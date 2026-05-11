@@ -1,7 +1,6 @@
 package config
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +18,14 @@ type ServiceConfig struct {
 	BuildCmd    string            `yaml:"build_cmd"`
 	Deps        []string          `yaml:"deps"` // Files/dirs that must exist
 	Description string            `yaml:"description"`
+	Tools       []ToolConfig      `yaml:"tools"`
+}
+
+type ToolConfig struct {
+	Name        string `yaml:"name"`
+	Enabled     bool   `yaml:"enabled"`
+	Tier        string `yaml:"tier"` // "core", "extended", "complete"
+	Description string `yaml:"description"`
 }
 
 type ManagerConfig struct {
