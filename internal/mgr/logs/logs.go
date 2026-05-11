@@ -5,39 +5,43 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 )
 
-func StreamLogs(services []string, stopChan chan struct{}) {
-	var wg sync.WaitGroup
+// Entry is a service name and optional absolute log path (empty → /tmp/<name>.log).
+type Entry struct {
+	Name string
+	Path string
+}
 
-	for _, s := range services {
-		service := s
+func StreamLogs(entries []Entry, stopChan chan struct{}) {
+	var wg sync.WaitGroup
+	for _, e := range entries {
+		entry := e
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			logFile := fmt.Sprintf("/tmp/%s.log", service)
-			file, err := os.Open(logFile)
+			path := entry.Path
+			if path == "" {
+				path = fmt.Sprintf("/tmp/%s.log", entry.Name)
+			}
+			file, err := os.Open(path)
 			if err != nil {
-				fmt.Printf("[%s] Error opening log: %v\n", service, err)
+				fmt.Printf("[%s] Error opening log %s: %v\n", entry.Name, path, err)
 				return
 			}
 			defer file.Close()
-
-			// Seek to end
-			file.Seek(0, os.SEEK_END)
+			_, _ = file.Seek(0, os.SEEK_END)
 			scanner := bufio.NewScanner(file)
-			
 			for {
 				select {
 				case <-stopChan:
 					return
 				default:
 					if scanner.Scan() {
-						fmt.Printf("[%s] %s\n", service, scanner.Text())
+						fmt.Printf("[%s] %s\n", entry.Name, scanner.Text())
 					} else {
-						// Small sleep to avoid spinning
-						// In a production app, we'd use fsnotify
-						// but this is a simple TUI logger.
+						time.Sleep(100 * time.Millisecond)
 					}
 				}
 			}

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"syscall"
 
@@ -17,7 +18,6 @@ type Process struct {
 }
 
 func StartService(cfg config.ServiceConfig) (*Process, error) {
-	// Dependency Guard
 	for _, dep := range cfg.Deps {
 		path := config.ExpandPath(dep)
 		if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -25,10 +25,10 @@ func StartService(cfg config.ServiceConfig) (*Process, error) {
 		}
 	}
 
-	// Build if needed
-	if cfg.BuildCmd != "" {
+	build := config.EffectiveBuild(cfg)
+	if build != "" {
 		fmt.Printf("Building %s...\n", cfg.Name)
-		cmd := exec.Command("sh", "-c", cfg.BuildCmd)
+		cmd := exec.Command("sh", "-c", build)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
@@ -36,27 +36,34 @@ func StartService(cfg config.ServiceConfig) (*Process, error) {
 		}
 	}
 
-	// Start process
-	cmd := exec.Command("sh", "-c", config.ExpandPath(cfg.Command))
-	cmd.Args = append(cmd.Args, cfg.Args...)
-	
+	logPath := cfg.Log
+	if logPath == "" {
+		logPath = filepath.Join(os.TempDir(), cfg.Name+".log")
+	}
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open log file: %w", err)
+	}
+
+	cmd := exec.Command(config.ExpandPath(cfg.Command), cfg.Args...)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+
 	env := os.Environ()
 	for k, v := range cfg.Env {
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}
 	cmd.Env = env
 
-	// Redirect logs to /tmp/
-	logFile, err := os.OpenFile(fmt.Sprintf("/tmp/%s.log", cfg.Name), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open log file: %w", err)
+	if runtime.GOOS != "windows" {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	}
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
 
 	if err := cmd.Start(); err != nil {
+		_ = logFile.Close()
 		return nil, fmt.Errorf("failed to start process: %w", err)
 	}
+	_ = logFile.Close()
 
 	return &Process{
 		Config: cfg,
@@ -91,4 +98,8 @@ func LoadPID(name string) (int, error) {
 		return 0, err
 	}
 	return strconv.Atoi(string(data))
+}
+
+func RemovePID(name string) error {
+	return os.Remove(GetPIDFile(name))
 }

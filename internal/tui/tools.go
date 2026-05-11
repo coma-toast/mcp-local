@@ -18,13 +18,13 @@ const (
 )
 
 type toolModel struct {
-	state    toolState
-	cfg      *config.ManagerConfig
-	svcIdx   int
-	toolIdx  int
-	cursor   int
-	input    textinput.Model
-	focused  bool
+	state   toolState
+	cfg     *config.ManagerConfig
+	svcIdx  int
+	toolIdx int
+	cursor  int
+	input   textinput.Model
+	focused bool
 }
 
 func initialToolModel(cfg *config.ManagerConfig) toolModel {
@@ -33,13 +33,13 @@ func initialToolModel(cfg *config.ManagerConfig) toolModel {
 	ti.Focus()
 
 	return toolModel{
-		state:    serviceListState,
-		cfg:      cfg,
-		svcIdx:   0,
-		toolIdx:  0,
-		cursor:   0,
-		input:    ti,
-		focused:  false,
+		state:   serviceListState,
+		cfg:     cfg,
+		svcIdx:  0,
+		toolIdx: 0,
+		cursor:  0,
+		input:   ti,
+		focused: false,
 	}
 }
 
@@ -154,7 +154,7 @@ func (m toolModel) View() string {
 	case toolListState:
 		svc := m.cfg.Services[m.svcIdx]
 		s.WriteString(fmt.Sprintf("Managing tools for: %s\n\n", selectedStyle.Render(svc.Name)))
-		
+
 		if len(svc.Tools) == 0 {
 			s.WriteString("No tools defined for this service.\n")
 			s.WriteString("\n(Press Backspace to return)")
@@ -175,7 +175,7 @@ func (m toolModel) View() string {
 					enabled = "✅"
 				}
 
-				s.WriteString(fmt.Sprintf("%s%s %-10s %-15s %s\n", 
+				s.WriteString(fmt.Sprintf("%s%s %-10s %-15s %s\n",
 					cursor, style.Render(tool.Name), enabled, tool.Tier, tool.Description))
 			}
 			s.WriteString("\n(Left/Right: Toggle/Tier, Enter: Edit Desc, Backspace: Back)")

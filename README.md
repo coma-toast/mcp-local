@@ -15,11 +15,11 @@ When building an advanced AI agent setup, you often end up with a fragmented eco
 ## ✨ Key Features
 
 ### 🛠️ Unified Lifecycle Management
-Stop juggling terminal tabs. Manage all your servers with simple commands:
-- `mcp-local start`: Launches all configured servers and automatically registers them with your agent.
-- `mcp-local stop`: Gracefully shuts down all managed services.
-- `mcp-local rebuild`: Stops, rebuilds from source (via `make` or custom scripts), and restarts.
-- `mcp-local status`: A live overview of which services are healthy and running.
+Stop juggling terminal tabs. Manage servers with:
+- `mcp-local start <service>` or `mcp-local start --all` — launches and registers with OpenCode (`~/.config/opencode/opencode.json` / `.jsonc`).
+- `mcp-local stop <service>` / `stop --all`, `restart <service>` / `restart --all`.
+- `mcp-local rebuild <service>` — runs `build_cmd` / `build_command` from config.
+- `mcp-local status` — bubbletea live table; `mcp-local status --plain` for scripting.
 
 ### ⚙️ Tool & Tier Management (TUI)
 Included is a professional Terminal User Interface (TUI) to manage the specific capabilities of your servers:
@@ -28,9 +28,7 @@ Included is a professional Terminal User Interface (TUI) to manage the specific 
 - **Custom Descriptions**: Override tool descriptions to help your agent understand when to use them.
 
 ### 🔄 Automatic Agent Registration
-No more manual JSON editing. When you run `start`, `mcp-local` automatically syncs your running services into:
-- **OpenCode**: `~/.config/opencode/opencode.jsonc`
-- **Cursor**: `.cursor/mcp.json` (via configuration)
+When you run `start`, `mcp-local` merges running services into OpenCode’s top-level **`mcp`** block under **`~/.config/opencode/opencode.jsonc`** (or **`opencode.json`**). Use **`register`** / **`deregister`** for explicit MCP URL updates.
 
 ### 📄 Portable Configuration
 All settings are stored in `~/.mcp-local/config.yaml`. Sync this file across your machines (via Dropbox, iCloud, or Git) to have an identical AI toolset everywhere.
@@ -55,9 +53,12 @@ While it can manage *any* binary, it is optimized for:
 ```bash
 git clone https://github.com/coma-toast/mcp-local.git
 cd mcp-local
-make build
-sudo mv mcp-local /usr/local/bin/
+make          # writes ./bin/mcp-local
+# Optional: install system-wide
+# sudo make install
 ```
+
+Add `./bin` to your PATH (e.g. Fish: `fish_add_path -m ~/git/mcp-local/bin` after first build).
 
 ### Configuration
 Create your config at `~/.mcp-local/config.yaml`:
@@ -81,10 +82,12 @@ services:
 
 ### Usage
 ```bash
-mcp-local start    # Start and register everything
-mcp-local tools    # Manage tools/tiers via TUI
-mcp-local status   # Check health
-mcp-local stop     # Shut down everything
+mcp-local start --all          # Start and register every service
+mcp-local status               # Live table (q to quit)
+mcp-local status --plain       # One-shot text output
+mcp-local tools                # Tool tier TUI
+mcp-local stop --all
+mcp-local register             # Push mcp_url entries to OpenCode config
 ```
 
 ## 📜 License

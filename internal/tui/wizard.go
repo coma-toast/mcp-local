@@ -199,7 +199,7 @@ func (m model) View() string {
 		}
 
 		s.WriteString("\n")
-		
+
 		addCursor := "  "
 		addStyle := itemStyle
 		if m.cursor == len(m.services) {
@@ -221,7 +221,7 @@ func (m model) View() string {
 	case formState:
 		s.WriteString("Add New Service:\n\n")
 		fields := []string{"Name", "Command", "Port", "Type (http/stdio)", "Env (K=V,K=V)", "Build Command", "Dependencies (csv)"}
-		
+
 		for i, input := range m.inputs {
 			label := itemStyle.Render(fields[i] + ": ")
 			if m.focused == i {

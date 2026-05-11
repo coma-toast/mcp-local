@@ -1,10 +1,15 @@
 BINARY := mcp-local
+BINDIR := bin
+BIN := $(BINDIR)/$(BINARY)
 
-build:
-	go build -o $(BINARY) ./cmd/mcp-local/main.go
+.PHONY: all build install clean
+
+all build:
+	mkdir -p $(BINDIR)
+	go build -o $(BIN) ./cmd/mcp-local
 
 install: build
-	mv $(BINARY) /usr/local/bin/
+	install -m 0755 $(BIN) /usr/local/bin/
 
 clean:
-	rm -f $(BINARY)
+	rm -f $(BIN)
