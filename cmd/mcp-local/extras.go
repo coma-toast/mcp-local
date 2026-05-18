@@ -147,21 +147,30 @@ func cmdLog() *cobra.Command {
 			if logPath == "" {
 				logPath = filepath.Join(os.TempDir(), args[0]+".log")
 			}
-			f, err := os.Open(logPath)
-			if err != nil {
-				return fmt.Errorf("open log %s: %w", logPath, err)
-			}
-			defer f.Close()
-			_, _ = f.Seek(0, io.SeekEnd)
-			reader := bufio.NewReader(f)
 			fmt.Printf("==> %s <==\n", logPath)
 			for {
-				line, err := reader.ReadString('\n')
-				if line != "" {
-					fmt.Print(line)
-				}
+				f, err := os.Open(logPath)
 				if err != nil {
 					time.Sleep(200 * time.Millisecond)
+					continue
+				}
+				_, _ = f.Seek(0, io.SeekEnd)
+				reader := bufio.NewReader(f)
+				for {
+					line, err := reader.ReadString('\n')
+					if line != "" {
+						fmt.Print(line)
+					}
+					if err == io.EOF {
+						_ = f.Close()
+						time.Sleep(200 * time.Millisecond)
+						break
+					}
+					if err != nil {
+						_ = f.Close()
+						time.Sleep(200 * time.Millisecond)
+						break
+					}
 				}
 			}
 		},
@@ -359,7 +368,10 @@ func cmdConfigEdit() *cobra.Command {
 		Use:   "config",
 		Short: "Open ~/.mcp-local/config.yaml in $EDITOR",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			p := config.GetConfigPath()
+			p, err := config.GetConfigPath()
+			if err != nil {
+				return err
+			}
 			if _, err := os.Stat(p); os.IsNotExist(err) {
 				if err := config.SaveConfig(&config.ManagerConfig{Services: nil}); err != nil {
 					return err

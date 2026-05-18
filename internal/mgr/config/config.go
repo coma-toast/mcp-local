@@ -81,13 +81,19 @@ func ExpandService(s *ServiceConfig) {
 	}
 }
 
-func GetConfigPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".mcp-local", "config.yaml")
+func GetConfigPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
+	return filepath.Join(home, ".mcp-local", "config.yaml"), nil
 }
 
 func LoadConfig() (*ManagerConfig, error) {
-	path := GetConfigPath()
+	path, err := GetConfigPath()
+	if err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -103,7 +109,10 @@ func LoadConfig() (*ManagerConfig, error) {
 }
 
 func SaveConfig(cfg *ManagerConfig) error {
-	path := GetConfigPath()
+	path, err := GetConfigPath()
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}

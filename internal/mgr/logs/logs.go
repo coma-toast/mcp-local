@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -23,7 +24,7 @@ func StreamLogs(entries []Entry, stopChan chan struct{}) {
 			defer wg.Done()
 			path := entry.Path
 			if path == "" {
-				path = fmt.Sprintf("/tmp/%s.log", entry.Name)
+				path = filepath.Join(os.TempDir(), entry.Name+".log")
 			}
 			file, err := os.Open(path)
 			if err != nil {
