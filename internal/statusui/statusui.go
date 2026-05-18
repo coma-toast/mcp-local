@@ -7,7 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
-	"github.com/coma-toast/mcp-local/internal/portutil"
+	"github.com/coma-toast/mcp-local/internal/mgr/runtime"
 )
 
 var (
@@ -62,14 +62,8 @@ func (m model) refresh() tea.Cmd {
 				continue
 			}
 			svc := m.byName[name]
-			running := portutil.IsRunning(svc.Port)
-			pid := 0
-			uptime := "-"
-			if running {
-				pid = portutil.FindPID(svc.Port)
-				uptime = portutil.GetUptime(pid)
-			}
-			rows = append(rows, row{name: name, running: running, pid: pid, port: svc.Port, uptime: uptime})
+			st := runtime.CheckStatus(svc)
+			rows = append(rows, row{name: st.Name, running: st.Running, pid: st.PID, port: st.Port, uptime: st.Uptime})
 		}
 		return rows
 	}

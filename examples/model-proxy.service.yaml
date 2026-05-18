@@ -1,0 +1,12 @@
+# stdio service example — append to ~/.mcp-local/config.yaml
+# This shows a model-proxy-style stdio MCP server.
+# stdio services have no port; status detects them via PID file.
+- name: model-proxy
+  command: ${HOME}/git/model-proxy/bin/model-proxy
+  type: stdio
+  args:
+    - --config
+    - ${HOME}/.config/model-proxy/config.yaml
+  log: ${HOME}/.mcp-local/model-proxy.log
+  description: Model proxy stdio MCP server
+  build_command: "cd ${HOME}/git/model-proxy && go build -o bin/model-proxy ./cmd/model-proxy"

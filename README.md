@@ -1,8 +1,8 @@
-# mcp-local 🚀
+# mcp-local
 
 `mcp-local` is a unified local control plane for managing Model Context Protocol (MCP) servers. Instead of managing multiple binaries, ports, and agent configurations manually, `mcp-local` provides a single point of control for your local AI infrastructure.
 
-## 🌟 Why mcp-local?
+## Why mcp-local?
 
 When building an advanced AI agent setup, you often end up with a fragmented ecosystem:
 - Multiple MCP servers running on different ports.
@@ -12,60 +12,76 @@ When building an advanced AI agent setup, you often end up with a fragmented eco
 
 `mcp-local` solves this by treating your MCP infrastructure as code. You define your servers in a single portable config, and `mcp-local` handles the rest.
 
-## ✨ Key Features
+## Key Features
 
-### 🛠️ Unified Lifecycle Management
-Stop juggling terminal tabs. Manage servers with:
-- `mcp-local start <service>` or `mcp-local start --all` — launches and registers with OpenCode (`~/.config/opencode/opencode.json` / `.jsonc`).
+### Unified Lifecycle Management
+- `mcp-local start <service>` or `mcp-local start --all` — launches and registers with OpenCode and Cursor.
 - `mcp-local stop <service>` / `stop --all`, `restart <service>` / `restart --all`.
-- `mcp-local rebuild <service>` — runs `build_cmd` / `build_command` from config.
+- `mcp-local stop --deregister` (default) — removes agent entries when stopping.
+- `mcp-local rebuild <service>` — runs `build_command` and re-registers.
 - `mcp-local status` — bubbletea live table; `mcp-local status --plain` for scripting.
+- stdio services detected via PID file (not just port).
 
-### ⚙️ Tool & Tier Management (TUI)
-Included is a professional Terminal User Interface (TUI) to manage the specific capabilities of your servers:
-- **Enable/Disable**: Turn specific tools on or off without editing code.
-- **Tier Control**: Assign tools to different access levels (`core`, `extended`, `complete`).
-- **Custom Descriptions**: Override tool descriptions to help your agent understand when to use them.
+### Dual Agent Registration
+On `start` / `restart` / `register`, services are registered with both:
+- **OpenCode**: `~/.config/opencode/opencode.jsonc` — HTTP as `remote`, stdio as `local`.
+- **Cursor**: `~/.cursor/mcp.json` — HTTP as `{ "url": "..." }`, stdio as `{ "command": "...", "args": [...], "env": {...} }`.
 
-### 🔄 Automatic Agent Registration
-When you run `start`, `mcp-local` merges running services into OpenCode’s top-level **`mcp`** block under **`~/.config/opencode/opencode.jsonc`** (or **`opencode.json`**). Use **`register`** / **`deregister`** for explicit MCP URL updates.
+Control which agents receive registrations via top-level config:
+```yaml
+agents:
+  opencode: true
+  cursor: true
+```
 
-### 📄 Portable Configuration
-All settings are stored in `~/.mcp-local/config.yaml`. Sync this file across your machines (via Dropbox, iCloud, or Git) to have an identical AI toolset everywhere.
+### Tool & Tier Management
+- `mcp-local tools` — TUI to enable/disable tools, change tiers, edit descriptions.
+- `mcp-local tools sync <service>` — fetches tool list from a running MCP server via `tools/list` and populates config.
+- On start, `active_tier` and `code_mode` are injected as `AST_MCP_TIER` / `AST_MCP_CODE_MODE` env vars.
+- Disabled tools are passed as `AST_MCP_DISABLED_TOOLS=tool1,tool2` env var.
+- Restart services after changing tool settings to apply.
 
-## 🤝 Supported Ecosystem
+### Portable Configuration
+All settings in `~/.mcp-local/config.yaml`. Sync across machines via Dropbox, iCloud, or Git.
 
-### Supported Agents
-- **OpenCode**: Full integration with `opencode.jsonc`.
-- **Cursor**: Support for `mcp.json` registration.
-- **Any MCP-compliant client**: Since it manages standard MCP servers, it works with any client that supports HTTP or stdio transports.
+## Supported Agents
+- **OpenCode**: Full integration with `opencode.jsonc` / `opencode.json`.
+- **Cursor**: Full integration with `~/.cursor/mcp.json`.
+- **Any MCP-compliant client**: Manages standard HTTP or stdio MCP servers.
 
-### Supported MCP Servers
+## Supported MCP Servers
 While it can manage *any* binary, it is optimized for:
-- **ast-context-cache**: Full lifecycle and TUI tool management.
-- **model-proxy**: Process management and registration.
-- **Storybook**: Dev server lifecycle.
-- **Custom Servers**: Simply add any binary to `config.yaml`.
+- **ast-context-cache**: Full lifecycle, tool tier env injection, and TUI management.
+- **model-proxy**: stdio process management and registration.
+- **Custom Servers**: Add any binary to `config.yaml`.
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Installation
 ```bash
 git clone https://github.com/coma-toast/mcp-local.git
 cd mcp-local
 make          # writes ./bin/mcp-local
+make test     # run unit tests
 # Optional: install system-wide
 # sudo make install
 ```
 
-Add `./bin` to your PATH (e.g. Fish: `fish_add_path -m ~/git/mcp-local/bin` after first build).
+Add `./bin` to your PATH.
 
 ### Configuration
-Create your config at `~/.mcp-local/config.yaml`.
+Create `~/.mcp-local/config.yaml` or copy the starter:
+```bash
+mkdir -p ~/.mcp-local
+cp examples/config.starter.yaml ~/.mcp-local/config.yaml
+```
 
-**ast-context-cache:** use the ready-made starter ([`examples/config.starter.yaml`](examples/config.starter.yaml)) or merge the service fragment from [`examples/ast-context-cache.service.yaml`](examples/ast-context-cache.service.yaml). Adjust `ONNXRUNTIME_LIB` if needed (Apple Silicon Homebrew: `/opt/homebrew/lib/libonnxruntime.dylib`; Intel macOS often `/usr/local/lib/libonnxruntime.dylib`).
-
+Example config:
 ```yaml
+agents:
+  opencode: true
+  cursor: true
+
 services:
   - name: ast-context-cache
     command: ${HOME}/git/ast-context-cache/ast-mcp
@@ -75,26 +91,65 @@ services:
     health_url: http://localhost:7821/health
     dashboard_url: http://localhost:7830
     log: ${HOME}/.mcp-local/ast-context-cache.log
+    active_tier: complete
     env:
       ONNXRUNTIME_LIB: /opt/homebrew/lib/libonnxruntime.dylib
     build_command: "cd ${HOME}/git/ast-context-cache && make build"
+    no_build_on_start: false   # set true to skip build on start
     deps:
       - ${HOME}/git/ast-context-cache/model/model.onnx
 
   - name: model-proxy
-    command: ${HOME}/git/model-proxy/model-proxy
+    command: ${HOME}/git/model-proxy/bin/model-proxy
     type: stdio
+    args:
+      - --config
+      - ${HOME}/.config/model-proxy/config.yaml
 ```
 
 ### Usage
 ```bash
-mcp-local start --all          # Start and register every service
+mcp-local start --all          # Start and register with all agents
 mcp-local status               # Live table (q to quit)
 mcp-local status --plain       # One-shot text output
+mcp-local tools sync ast-context-cache   # Fetch tools from running server
 mcp-local tools                # Tool tier TUI
-mcp-local stop --all
-mcp-local register             # Push mcp_url entries to OpenCode config
+mcp-local stop --all           # Stop and deregister (default)
+mcp-local stop --all --deregister=false  # Stop without deregistering
+mcp-local register             # Register all services with agents
+mcp-local deregister           # Remove entries for stopped services
 ```
 
-## 📜 License
+## Config Reference
+
+| Field | Description |
+|-------|-------------|
+| `name` | Service identifier |
+| `command` | Path to binary (supports `${HOME}` and `~/`) |
+| `args` | Command-line arguments |
+| `port` | TCP listen port (omit for stdio) |
+| `type` | `http` or `stdio` |
+| `mcp_url` | MCP endpoint URL for remote registration |
+| `health_url` | HTTP health check endpoint |
+| `dashboard_url` | Web dashboard URL |
+| `log` | Log file path |
+| `env` | Environment variables (key-value map) |
+| `build_command` | Shell command to build the service |
+| `no_build_on_start` | Skip build on `start` (default: false, i.e. build runs) |
+| `deps` | Required file paths (checked before start) |
+| `active_tier` | Injected as `AST_MCP_TIER` env var |
+| `code_mode` | Injected as `AST_MCP_CODE_MODE=true` when true |
+| `tools` | Per-tool config (name, enabled, tier, description) |
+
+## Development
+
+```bash
+make        # build
+make test   # run tests
+make check  # test + vet + fmt
+```
+
+CI runs `go test ./...`, `go vet`, and `go build` on push/PR.
+
+## License
 MIT

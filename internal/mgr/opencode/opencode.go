@@ -6,14 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
 )
 
 var stripLineComments = regexp.MustCompile(`(?m)^\s*//.*$`)
 
-// ConfigPath returns the OpenCode global config file (JSONC preferred if present).
 func ConfigPath() string {
 	home, _ := os.UserHomeDir()
 	j := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
@@ -56,7 +54,23 @@ func ensureMCPBlock(m map[string]interface{}) map[string]interface{} {
 	return block
 }
 
-// RegisterRemote writes or updates a remote MCP server under top-level "mcp" (OpenCode schema).
+func entryToOpenCode(entry config.AgentEntry) map[string]interface{} {
+	obj := map[string]interface{}{
+		"type":    entry.Type,
+		"enabled": true,
+	}
+	if entry.Type == "remote" {
+		obj["url"] = entry.URL
+		obj["timeout"] = entry.Timeout
+	} else {
+		obj["command"] = entry.Command
+		if len(entry.Environment) > 0 {
+			obj["environment"] = entry.Environment
+		}
+	}
+	return obj
+}
+
 func RegisterRemote(name, url string, timeoutMS int) error {
 	path := ConfigPath()
 	m, err := readJSONC(path)
@@ -86,7 +100,6 @@ func RegisterRemote(name, url string, timeoutMS int) error {
 	return writeJSONC(path, m)
 }
 
-// RegisterLocal writes or updates a local MCP server (command argv array, optional environment map).
 func RegisterLocal(name string, command []string, env map[string]string) error {
 	if len(command) == 0 {
 		return fmt.Errorf("empty command for %q", name)
@@ -116,7 +129,6 @@ func RegisterLocal(name string, command []string, env map[string]string) error {
 	return writeJSONC(path, m)
 }
 
-// Deregister removes an entry from mcp.<name>. Returns true if something was removed.
 func Deregister(name string) (bool, error) {
 	path := ConfigPath()
 	m, err := readJSONC(path)
@@ -135,7 +147,6 @@ func Deregister(name string) (bool, error) {
 	return true, writeJSONC(path, m)
 }
 
-// RegisterServices merges running services into OpenCode "mcp" using http → remote, stdio → local.
 func RegisterServices(services []config.ServiceConfig) error {
 	path := ConfigPath()
 	m, err := readJSONC(path)
@@ -146,46 +157,12 @@ func RegisterServices(services []config.ServiceConfig) error {
 	}
 	block := ensureMCPBlock(m)
 	for _, s := range services {
-		entry, err := serviceToEntry(s)
+		entry, err := config.ServiceToEntry(s)
 		if err != nil {
 			return fmt.Errorf("%s: %w", s.Name, err)
 		}
-		block[s.Name] = entry
+		block[s.Name] = entryToOpenCode(entry)
 	}
 	m["mcp"] = block
 	return writeJSONC(path, m)
-}
-
-func serviceToEntry(s config.ServiceConfig) (map[string]interface{}, error) {
-	t := strings.ToLower(strings.TrimSpace(s.MCPType))
-	isHTTP := t == "http" || (s.Port > 0 && t != "stdio")
-
-	if isHTTP {
-		url := strings.TrimSpace(s.MCPURL)
-		if url == "" {
-			url = fmt.Sprintf("http://localhost:%d/mcp", s.Port)
-		}
-		return map[string]interface{}{
-			"type":    "remote",
-			"url":     url,
-			"enabled": true,
-			"timeout": 30000,
-		}, nil
-	}
-
-	cmd := []string{config.ExpandPath(s.Command)}
-	cmd = append(cmd, s.Args...)
-	entry := map[string]interface{}{
-		"type":    "local",
-		"command": cmd,
-		"enabled": true,
-	}
-	if len(s.Env) > 0 {
-		envObj := map[string]interface{}{}
-		for k, v := range s.Env {
-			envObj[k] = v
-		}
-		entry["environment"] = envObj
-	}
-	return entry, nil
 }

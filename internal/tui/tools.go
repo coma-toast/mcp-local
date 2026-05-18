@@ -157,6 +157,7 @@ func (m toolModel) View() string {
 
 		if len(svc.Tools) == 0 {
 			s.WriteString("No tools defined for this service.\n")
+			s.WriteString("Run: mcp-local tools sync " + svc.Name + "\n")
 			s.WriteString("\n(Press Backspace to return)")
 		} else {
 			s.WriteString(fmt.Sprintf("%-20s %-10s %-15s %s\n", "TOOL", "ENABLED", "TIER", "DESCRIPTION"))
@@ -202,5 +203,6 @@ func RunToolManager(cfg *config.ManagerConfig) error {
 		return fmt.Errorf("failed to save config: %v", err)
 	}
 
+	fmt.Println("\n⚠️  Changes saved to config.yaml. Restart services to apply env/tool settings.")
 	return nil
 }

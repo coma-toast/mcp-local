@@ -1,6 +1,13 @@
 # Starter ~/.mcp-local/config.yaml — ast-context-cache only.
 # Install: mkdir -p ~/.mcp-local && cp examples/config.starter.yaml ~/.mcp-local/config.yaml
 # Then: build once in ~/git/ast-context-cache (`make build`), adjust ONNXRUNTIME_LIB if needed, `mcp-local start ast-context-cache`
+#
+# Tool tiers: run `mcp-local tools sync ast-context-cache` to populate tools from the server,
+# then `mcp-local tools` to enable/disable or change tiers. Restart to apply changes.
+agents:
+  opencode: true
+  cursor: true
+
 services:
   - name: ast-context-cache
     command: ${HOME}/git/ast-context-cache/ast-mcp
@@ -11,8 +18,10 @@ services:
     dashboard_url: http://localhost:7830
     log: ${HOME}/.mcp-local/ast-context-cache.log
     description: ast-context-cache MCP + dashboard
+    active_tier: complete
     env:
       ONNXRUNTIME_LIB: /opt/homebrew/lib/libonnxruntime.dylib
     build_command: "cd ${HOME}/git/ast-context-cache && make build"
     deps:
       - ${HOME}/git/ast-context-cache/model/model.onnx
+    tools: []

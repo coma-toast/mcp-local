@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,7 +17,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/coma-toast/mcp-local/internal/mgr/agents"
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
+	"github.com/coma-toast/mcp-local/internal/mgr/cursor"
 	"github.com/coma-toast/mcp-local/internal/mgr/logs"
 	"github.com/coma-toast/mcp-local/internal/mgr/opencode"
 	"github.com/coma-toast/mcp-local/internal/portutil"
@@ -211,11 +214,19 @@ func cmdRebuild() *cobra.Command {
 				return fmt.Errorf("rebuild failed: %w", err)
 			}
 			fmt.Printf("%s: rebuild complete\n", args[0])
-			if svc.MCPURL != "" {
+			targets := agents.TargetsFromConfig(*cfg)
+			if targets.OpenCode && svc.MCPURL != "" {
 				if err := opencode.RegisterRemote(args[0], svc.MCPURL, 30000); err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "  opencode: register failed: %v\n", err)
 				} else {
 					fmt.Printf("  opencode: registered %s → %s\n", args[0], svc.MCPURL)
+				}
+			}
+			if targets.Cursor && svc.MCPURL != "" {
+				if err := cursor.RegisterRemote(args[0], svc.MCPURL); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "  cursor: register failed: %v\n", err)
+				} else {
+					fmt.Printf("  cursor: registered %s → %s\n", args[0], svc.MCPURL)
 				}
 			}
 			return nil
@@ -385,7 +396,7 @@ func cmdConfigEdit() *cobra.Command {
 func cmdRegister() *cobra.Command {
 	return &cobra.Command{
 		Use:   "register [service]",
-		Short: "Register mcp_url in OpenCode global config",
+		Short: "Register service(s) with OpenCode and Cursor",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := mustConfig()
 			names := cfg.SortedNames()
@@ -395,16 +406,27 @@ func cmdRegister() *cobra.Command {
 				}
 				names = []string{args[0]}
 			}
+			targets := agents.TargetsFromConfig(*cfg)
+			var toRegister []config.ServiceConfig
 			for _, name := range names {
 				svc, _ := cfg.ServiceNamed(name)
-				if svc.MCPURL == "" {
-					fmt.Printf("  %-24s skipped (no mcp_url)\n", name)
+				if svc.MCPURL == "" && svc.Command == "" {
+					fmt.Printf("  %-24s skipped (no mcp_url or command)\n", name)
 					continue
 				}
-				if err := opencode.RegisterRemote(name, svc.MCPURL, 30000); err != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "  %-24s ERROR: %v\n", name, err)
-				} else {
-					fmt.Printf("  %-24s → %s\n", name, svc.MCPURL)
+				toRegister = append(toRegister, svc)
+			}
+			if len(toRegister) > 0 {
+				if err := agents.RegisterAll(toRegister, targets); err != nil {
+					return err
+				}
+				for _, svc := range toRegister {
+					if targets.OpenCode {
+						fmt.Printf("  %-24s → opencode\n", svc.Name)
+					}
+					if targets.Cursor {
+						fmt.Printf("  %-24s → cursor\n", svc.Name)
+					}
 				}
 			}
 			return nil
@@ -415,7 +437,7 @@ func cmdRegister() *cobra.Command {
 func cmdDeregister() *cobra.Command {
 	return &cobra.Command{
 		Use:   "deregister [service]",
-		Short: "Remove MCP entry from OpenCode config",
+		Short: "Remove MCP entries from OpenCode and Cursor configs",
 		Long:  "Without a service name: removes entries for services that have mcp_url and are not running. With a name: always removes that entry.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := mustConfig()
@@ -427,22 +449,31 @@ func cmdDeregister() *cobra.Command {
 				}
 				names = []string{args[0]}
 			}
+			targets := agents.TargetsFromConfig(*cfg)
 			for _, name := range names {
 				svc, _ := cfg.ServiceNamed(name)
-				if svc.MCPURL == "" {
+				if svc.MCPURL == "" && svc.Command == "" {
 					continue
 				}
 				if !force && svc.Port > 0 && portutil.IsRunning(svc.Port) {
 					fmt.Printf("  %-24s skipped (running)\n", name)
 					continue
 				}
-				ok, err := opencode.Deregister(name)
-				if err != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "  %-24s ERROR: %v\n", name, err)
-				} else if ok {
-					fmt.Printf("  %-24s removed\n", name)
-				} else {
-					fmt.Printf("  %-24s not in opencode config\n", name)
+				if targets.OpenCode {
+					ok, err := opencode.Deregister(name)
+					if err != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "  %-24s opencode ERROR: %v\n", name, err)
+					} else if ok {
+						fmt.Printf("  %-24s opencode removed\n", name)
+					}
+				}
+				if targets.Cursor {
+					err := cursor.Deregister(name)
+					if err != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "  %-24s cursor ERROR: %v\n", name, err)
+					} else {
+						fmt.Printf("  %-24s cursor removed\n", name)
+					}
 				}
 			}
 			return nil
@@ -478,7 +509,7 @@ func cmdLogsUnified() *cobra.Command {
 }
 
 func cmdTools() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "tools",
 		Short: "Manage tool tiers (TUI)",
 		Run: func(cmd *cobra.Command, args []string) {
@@ -489,4 +520,160 @@ func cmdTools() *cobra.Command {
 			}
 		},
 	}
+	cmd.AddCommand(cmdToolsSync())
+	return cmd
+}
+
+func cmdToolsSync() *cobra.Command {
+	return &cobra.Command{
+		Use:   "sync <service>",
+		Short: "Sync tools list from a running MCP server",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := mustConfig()
+			svc, err := cfg.ServiceNamed(args[0])
+			if err != nil {
+				return err
+			}
+			mcpURL := strings.TrimSpace(svc.MCPURL)
+			if mcpURL == "" && svc.Port > 0 {
+				mcpURL = fmt.Sprintf("http://localhost:%d/mcp", svc.Port)
+			}
+			if mcpURL == "" {
+				return fmt.Errorf("no mcp_url or port for %s", args[0])
+			}
+			tools, err := fetchToolsList(mcpURL)
+			if err != nil {
+				return fmt.Errorf("failed to fetch tools: %w", err)
+			}
+			existing := make(map[string]config.ToolConfig)
+			for _, t := range svc.Tools {
+				existing[t.Name] = t
+			}
+			var merged []config.ToolConfig
+			for _, t := range tools {
+				if prev, ok := existing[t.Name]; ok {
+					t.Enabled = prev.Enabled
+					if prev.Tier != "" {
+						t.Tier = prev.Tier
+					}
+					if prev.Description != "" {
+						t.Description = prev.Description
+					}
+				}
+				merged = append(merged, t)
+			}
+			for i := range cfg.Services {
+				if cfg.Services[i].Name == args[0] {
+					cfg.Services[i].Tools = merged
+					break
+				}
+			}
+			if err := config.SaveConfig(cfg); err != nil {
+				return err
+			}
+			fmt.Printf("Synced %d tools for %s\n", len(merged), args[0])
+			for _, t := range merged {
+				en := "enabled"
+				if !t.Enabled {
+					en = "disabled"
+				}
+				fmt.Printf("  %-30s  %s  tier=%s\n", t.Name, en, t.Tier)
+			}
+			return nil
+		},
+	}
+}
+
+type jsonRPCRequest struct {
+	JSONRPC string      `json:"jsonrpc"`
+	ID      int         `json:"id"`
+	Method  string      `json:"method"`
+	Params  interface{} `json:"params,omitempty"`
+}
+
+type jsonRPCResponse struct {
+	JSONRPC string `json:"jsonrpc"`
+	ID      int    `json:"id"`
+	Result  struct {
+		Tools []struct {
+			Name        string                 `json:"name"`
+			Description string                 `json:"description"`
+			InputSchema map[string]interface{} `json:"inputSchema"`
+		} `json:"tools"`
+	} `json:"result,omitempty"`
+	Error *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+}
+
+func fetchToolsList(mcpURL string) ([]config.ToolConfig, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	initReq := jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "initialize",
+		Params: map[string]interface{}{
+			"protocolVersion": "2024-11-05",
+			"clientInfo":      map[string]string{"name": "mcp-local", "version": "0.1.0"},
+		},
+	}
+	initBody, _ := json.Marshal(initReq)
+	resp, err := client.Post(mcpURL, "application/json", bytes.NewReader(initBody))
+	if err != nil {
+		return nil, err
+	}
+	var initResp jsonRPCResponse
+	if err := json.NewDecoder(resp.Body).Decode(&initResp); err != nil {
+		resp.Body.Close()
+		return nil, fmt.Errorf("initialize response: %w", err)
+	}
+	resp.Body.Close()
+	if initResp.Error != nil {
+		return nil, fmt.Errorf("initialize error: %s", initResp.Error.Message)
+	}
+
+	initializedReq := jsonRPCRequest{
+		JSONRPC: "2.0",
+		Method:  "notifications/initialized",
+	}
+	initializedBody, _ := json.Marshal(initializedReq)
+	resp, err = client.Post(mcpURL, "application/json", bytes.NewReader(initializedBody))
+	if err != nil {
+		return nil, fmt.Errorf("send initialized notification: %w", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	toolsReq := jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      2,
+		Method:  "tools/list",
+	}
+	toolsBody, _ := json.Marshal(toolsReq)
+	resp, err = client.Post(mcpURL, "application/json", bytes.NewReader(toolsBody))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var rpcResp jsonRPCResponse
+	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
+		return nil, err
+	}
+	if rpcResp.Error != nil {
+		return nil, fmt.Errorf("MCP error: %s", rpcResp.Error.Message)
+	}
+	var tools []config.ToolConfig
+	for _, t := range rpcResp.Result.Tools {
+		tools = append(tools, config.ToolConfig{
+			Name:        t.Name,
+			Description: t.Description,
+			Enabled:     true,
+			Tier:        "core",
+			InputSchema: t.InputSchema,
+		})
+	}
+	return tools, nil
 }

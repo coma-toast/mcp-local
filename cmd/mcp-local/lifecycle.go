@@ -7,8 +7,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/coma-toast/mcp-local/internal/mgr/agents"
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
-	"github.com/coma-toast/mcp-local/internal/mgr/opencode"
 	"github.com/coma-toast/mcp-local/internal/mgr/process"
 	"github.com/coma-toast/mcp-local/internal/portutil"
 	"github.com/spf13/cobra"
@@ -30,11 +30,12 @@ func resolveTargets(cfg *config.ManagerConfig, args []string, all bool, verb str
 	return []string{args[0]}
 }
 
-func stopServiceNamed(cfg *config.ManagerConfig, name string) error {
+func stopServiceNamed(cfg *config.ManagerConfig, name string, deregister bool) error {
 	svc, err := cfg.ServiceNamed(name)
 	if err != nil {
 		return err
 	}
+	targets := agents.TargetsFromConfig(*cfg)
 	if pid, err := process.LoadPID(name); err == nil {
 		proc, _ := os.FindProcess(pid)
 		_ = proc.Signal(syscall.SIGTERM)
@@ -43,12 +44,18 @@ func stopServiceNamed(cfg *config.ManagerConfig, name string) error {
 			if svc.Port <= 0 || !portutil.IsRunning(svc.Port) {
 				_ = process.RemovePID(name)
 				fmt.Printf("  ✅ %s stopped (pid %d)\n", name, pid)
+				if deregister {
+					_ = agents.DeregisterAll(name, targets)
+				}
 				return nil
 			}
 		}
 		_ = proc.Signal(syscall.SIGKILL)
 		_ = process.RemovePID(name)
 		fmt.Printf("  ✅ %s killed (pid %d)\n", name, pid)
+		if deregister {
+			_ = agents.DeregisterAll(name, targets)
+		}
 		return nil
 	}
 	pid := portutil.FindPID(svc.Port)
@@ -62,11 +69,17 @@ func stopServiceNamed(cfg *config.ManagerConfig, name string) error {
 		time.Sleep(100 * time.Millisecond)
 		if svc.Port <= 0 || !portutil.IsRunning(svc.Port) {
 			fmt.Printf("  ✅ %s stopped (pid %d)\n", name, pid)
+			if deregister {
+				_ = agents.DeregisterAll(name, targets)
+			}
 			return nil
 		}
 	}
 	_ = proc.Signal(syscall.SIGKILL)
 	fmt.Printf("  ✅ %s killed (pid %d)\n", name, pid)
+	if deregister {
+		_ = agents.DeregisterAll(name, targets)
+	}
 	return nil
 }
 
@@ -74,7 +87,7 @@ func addLifecycle() {
 	var startAll bool
 	start := &cobra.Command{
 		Use:   "start [service]",
-		Short: "Start service(s) and register with OpenCode",
+		Short: "Start service(s) and register with agents",
 		Run: func(cmd *cobra.Command, args []string) {
 			cfg := mustConfig()
 			names := resolveTargets(cfg, args, startAll, "start")
@@ -91,7 +104,12 @@ func addLifecycle() {
 					started = append(started, svc)
 					continue
 				}
-				p, err := process.StartService(svc)
+				svcForStart := svc
+				if !config.ShouldBuildOnStart(svcForStart) {
+					svcForStart.BuildCmd = ""
+					svcForStart.BuildCommand = ""
+				}
+				p, err := process.StartService(svcForStart)
 				if err != nil {
 					fmt.Printf("  ❌ %s: %v\n", name, err)
 					continue
@@ -106,11 +124,17 @@ func addLifecycle() {
 				started = append(started, svc)
 			}
 			if len(started) > 0 {
-				fmt.Println("\n🔄 Registering services with OpenCode...")
-				if err := opencode.RegisterServices(started); err != nil {
+				targets := agents.TargetsFromConfig(*cfg)
+				fmt.Println("\n🔄 Registering services with agents...")
+				if err := agents.RegisterAll(started, targets); err != nil {
 					fmt.Printf("  ⚠️ Registration failed: %v\n", err)
 				} else {
-					fmt.Println("  ✅ Registration complete")
+					if targets.OpenCode {
+						fmt.Println("  ✅ OpenCode registration complete")
+					}
+					if targets.Cursor {
+						fmt.Println("  ✅ Cursor registration complete")
+					}
 				}
 			}
 			fmt.Println("\nDone!")
@@ -119,6 +143,7 @@ func addLifecycle() {
 	start.Flags().BoolVar(&startAll, "all", false, "start every configured service")
 
 	var stopAll bool
+	var stopDeregister bool
 	stop := &cobra.Command{
 		Use:   "stop [service]",
 		Short: "Stop service(s)",
@@ -127,7 +152,7 @@ func addLifecycle() {
 			names := resolveTargets(cfg, args, stopAll, "stop")
 			fmt.Println("⏹️  Stopping MCP servers...")
 			for _, name := range names {
-				if err := stopServiceNamed(cfg, name); err != nil {
+				if err := stopServiceNamed(cfg, name, stopDeregister); err != nil {
 					fmt.Printf("  ❌ %s: %v\n", name, err)
 				}
 			}
@@ -135,6 +160,7 @@ func addLifecycle() {
 		},
 	}
 	stop.Flags().BoolVar(&stopAll, "all", false, "stop every configured service")
+	stop.Flags().BoolVar(&stopDeregister, "deregister", true, "deregister from agents after stopping")
 
 	var restartAll bool
 	restart := &cobra.Command{
@@ -144,7 +170,7 @@ func addLifecycle() {
 			cfg := mustConfig()
 			names := resolveTargets(cfg, args, restartAll, "restart")
 			for _, name := range names {
-				_ = stopServiceNamed(cfg, name)
+				_ = stopServiceNamed(cfg, name, false)
 			}
 			time.Sleep(300 * time.Millisecond)
 			var started []config.ServiceConfig
@@ -160,7 +186,12 @@ func addLifecycle() {
 					started = append(started, svc)
 					continue
 				}
-				p, err := process.StartService(svc)
+				svcForStart := svc
+				if !config.ShouldBuildOnStart(svcForStart) {
+					svcForStart.BuildCmd = ""
+					svcForStart.BuildCommand = ""
+				}
+				p, err := process.StartService(svcForStart)
 				if err != nil {
 					fmt.Printf("  ❌ %s: %v\n", name, err)
 					continue
@@ -173,11 +204,17 @@ func addLifecycle() {
 				started = append(started, svc)
 			}
 			if len(started) > 0 {
-				fmt.Println("\n🔄 Registering services with OpenCode...")
-				if err := opencode.RegisterServices(started); err != nil {
+				targets := agents.TargetsFromConfig(*cfg)
+				fmt.Println("\n🔄 Registering services with agents...")
+				if err := agents.RegisterAll(started, targets); err != nil {
 					fmt.Printf("  ⚠️ Registration failed: %v\n", err)
 				} else {
-					fmt.Println("  ✅ Registration complete")
+					if targets.OpenCode {
+						fmt.Println("  ✅ OpenCode registration complete")
+					}
+					if targets.Cursor {
+						fmt.Println("  ✅ Cursor registration complete")
+					}
 				}
 			}
 			fmt.Println("\nDone!")

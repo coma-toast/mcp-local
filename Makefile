@@ -2,7 +2,7 @@ BINARY := mcp-local
 BINDIR := bin
 BIN := $(BINDIR)/$(BINARY)
 
-.PHONY: all build install clean
+.PHONY: all build install clean test check
 
 all build:
 	mkdir -p $(BINDIR)
@@ -10,6 +10,13 @@ all build:
 
 install: build
 	install -m 0755 $(BIN) /usr/local/bin/
+
+test:
+	go test ./...
+
+check: test
+	go vet ./...
+	go fmt ./...
 
 clean:
 	rm -f $(BIN)
