@@ -49,24 +49,9 @@ type ManagerConfig struct {
 	Agents   AgentsConfig    `yaml:"agents,omitempty"`
 }
 
-func (a AgentsConfig) OpenCodeEnabled() bool {
-	return a.OpenCode
-}
-
-func (a AgentsConfig) CursorEnabled() bool {
-	return a.Cursor
-}
-
-func DefaultAgents() AgentsConfig {
-	return AgentsConfig{OpenCode: true, Cursor: true}
-}
-
-func (a AgentsConfig) ShouldRegisterOpenCode() bool {
-	return a.OpenCode
-}
-
-func (a AgentsConfig) ShouldRegisterCursor() bool {
-	return a.Cursor
+func (s ServiceConfig) IsHTTP() bool {
+	t := strings.ToLower(strings.TrimSpace(s.MCPType))
+	return t == "http" || (s.Port > 0 && t != "stdio")
 }
 
 func EffectiveBuild(s ServiceConfig) string {

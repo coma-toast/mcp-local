@@ -253,21 +253,13 @@ func cmdAdd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			cfg := mustConfig()
-			var existing *config.ServiceConfig
-			var idx = -1
-			for i := range cfg.Services {
-				if cfg.Services[i].Name == name {
-					existing = &cfg.Services[i]
-					idx = i
-					break
-				}
-			}
-			isNew := existing == nil
+			existing, _ := cfg.ServiceNamed(name)
+			isNew := existing.Name == ""
 			var svc config.ServiceConfig
 			if isNew {
 				svc.Name = name
 			} else {
-				svc = *existing
+				svc = existing
 			}
 			if cmd.Flags().Changed("command") {
 				svc.Command = command
@@ -331,11 +323,7 @@ func cmdAdd() *cobra.Command {
 					}
 				}
 			}
-			if isNew {
-				cfg.Services = append(cfg.Services, svc)
-			} else {
-				cfg.Services[idx] = svc
-			}
+			cfg.UpsertService(svc)
 			if err := config.SaveConfig(cfg); err != nil {
 				return err
 			}

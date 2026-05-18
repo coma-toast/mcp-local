@@ -38,7 +38,7 @@ func entryToOpenCode(entry config.AgentEntry) map[string]interface{} {
 	}
 	if entry.Type == "remote" {
 		obj["url"] = entry.URL
-		obj["timeout"] = entry.Timeout
+		obj["timeout"] = 30000
 	} else {
 		obj["command"] = entry.Command
 		if len(entry.Environment) > 0 {
