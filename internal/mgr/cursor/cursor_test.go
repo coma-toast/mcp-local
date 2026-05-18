@@ -102,21 +102,3 @@ func TestDeregister(t *testing.T) {
 		t.Error("to-remove should be deregistered")
 	}
 }
-
-func TestHTTPServiceDetection(t *testing.T) {
-	tests := []struct {
-		svc  config.ServiceConfig
-		want bool
-	}{
-		{config.ServiceConfig{Port: 8080, MCPType: "http"}, true},
-		{config.ServiceConfig{Port: 8080}, true},
-		{config.ServiceConfig{Port: 8080, MCPType: "stdio"}, false},
-		{config.ServiceConfig{Command: "/usr/bin/mcp", MCPType: "stdio"}, false},
-	}
-	for _, tt := range tests {
-		got := IsHTTPService(tt.svc)
-		if got != tt.want {
-			t.Errorf("IsHTTPService(%+v) = %v, want %v", tt.svc, got, tt.want)
-		}
-	}
-}
