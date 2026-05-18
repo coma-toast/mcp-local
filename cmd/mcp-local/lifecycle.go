@@ -14,10 +14,10 @@ import (
 )
 
 const (
-	portWait            = 5 * time.Second
-	maxStopAttempts     = 30
-	stopPollInterval    = 100 * time.Millisecond
-	restartDelay        = 300 * time.Millisecond
+	portWait         = 5 * time.Second
+	maxStopAttempts  = 30
+	stopPollInterval = 100 * time.Millisecond
+	restartDelay     = 300 * time.Millisecond
 )
 
 func resolveTargets(cfg *config.ManagerConfig, args []string, all bool, verb string) ([]string, error) {

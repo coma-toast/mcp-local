@@ -49,7 +49,10 @@ type model struct {
 	focused  int
 }
 
-func initialModel() model {
+func initialModel(existing []config.ServiceConfig) model {
+	services := make([]config.ServiceConfig, len(existing))
+	copy(services, existing)
+
 	inputs := make([]textinput.Model, 7)
 	fields := []string{"Name", "Command", "Port", "Type (http/stdio)", "Env (K=V,K=V)", "Build Command", "Dependencies (csv)"}
 
@@ -64,7 +67,7 @@ func initialModel() model {
 
 	return model{
 		state:    listState,
-		services: []config.ServiceConfig{},
+		services: services,
 		cursor:   0,
 		inputs:   inputs,
 		focused:  0,
@@ -244,7 +247,12 @@ func (m model) View() string {
 }
 
 func RunConfigWizard() (*config.ManagerConfig, error) {
-	p := tea.NewProgram(initialModel())
+	existing, _ := config.LoadConfig()
+	var services []config.ServiceConfig
+	if existing != nil {
+		services = existing.Services
+	}
+	p := tea.NewProgram(initialModel(services))
 	m, err := p.Run()
 	if err != nil {
 		return nil, err

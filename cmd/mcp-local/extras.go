@@ -106,9 +106,13 @@ func addCommands() {
 	rootCmd.AddCommand(cmdOpen())
 	rootCmd.AddCommand(cmdRebuild())
 	rootCmd.AddCommand(cmdAdd())
+	rootCmd.AddCommand(cmdRemove())
+	rootCmd.AddCommand(cmdEdit())
 	rootCmd.AddCommand(cmdConfigEdit())
 	rootCmd.AddCommand(cmdRegister())
 	rootCmd.AddCommand(cmdDeregister())
+	rootCmd.AddCommand(cmdRegistered())
+	rootCmd.AddCommand(cmdValidate())
 
 	rootCmd.AddCommand(cmdLogsUnified())
 	rootCmd.AddCommand(cmdTools())
@@ -224,18 +228,14 @@ func cmdRebuild() *cobra.Command {
 			}
 			fmt.Printf("%s: rebuild complete\n", args[0])
 			targets := agents.TargetsFromConfig(*cfg)
-			if targets.OpenCode && svc.MCPURL != "" {
-				if err := opencode.RegisterRemote(args[0], svc.MCPURL, 30000); err != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "  opencode: register failed: %v\n", err)
-				} else {
-					fmt.Printf("  opencode: registered %s → %s\n", args[0], svc.MCPURL)
+			if err := agents.RegisterAll([]config.ServiceConfig{svc}, targets); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "  ⚠️  Registration failed: %v\n", err)
+			} else {
+				if targets.OpenCode {
+					fmt.Printf("  ✅ opencode: registered %s\n", args[0])
 				}
-			}
-			if targets.Cursor && svc.MCPURL != "" {
-				if err := cursor.RegisterRemote(args[0], svc.MCPURL); err != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "  cursor: register failed: %v\n", err)
-				} else {
-					fmt.Printf("  cursor: registered %s → %s\n", args[0], svc.MCPURL)
+				if targets.Cursor {
+					fmt.Printf("  ✅ cursor: registered %s\n", args[0])
 				}
 			}
 			return nil
@@ -247,6 +247,7 @@ func cmdAdd() *cobra.Command {
 	var (
 		command      string
 		port         int
+		svcType      string
 		health       string
 		dashboard    string
 		mcpURL       string
@@ -275,6 +276,9 @@ func cmdAdd() *cobra.Command {
 			}
 			if cmd.Flags().Changed("port") {
 				svc.Port = port
+			}
+			if cmd.Flags().Changed("type") {
+				svc.MCPType = svcType
 			}
 			if cmd.Flags().Changed("health") {
 				svc.HealthURL = health
@@ -306,11 +310,18 @@ func cmdAdd() *cobra.Command {
 				}
 			}
 			if isNew {
-				if svc.Command == "" {
-					svc.Command = prompt("Command (path to binary): ")
+				if svc.Command == "" && svc.MCPURL == "" {
+					svc.Command = prompt("Command (path to binary, or empty for remote-only): ")
 				}
-				if svc.Port == 0 {
-					portStr := prompt("Port: ")
+				if svc.MCPType == "" {
+					svc.MCPType = prompt("Type (http/stdio, or empty to auto-detect): ")
+				}
+				if svc.Command == "" && svc.Port == 0 && svc.MCPURL == "" {
+					mcpURL := prompt("MCP URL (for remote-only service): ")
+					svc.MCPURL = strings.TrimSpace(mcpURL)
+				}
+				if svc.Port == 0 && svc.Command != "" {
+					portStr := prompt("Port (0 for stdio): ")
 					svc.Port, _ = strconv.Atoi(strings.TrimSpace(portStr))
 				}
 				if svc.HealthURL == "" && svc.Port > 0 {
@@ -322,7 +333,7 @@ func cmdAdd() *cobra.Command {
 						svc.HealthURL = strings.TrimSpace(val)
 					}
 				}
-				if svc.Log == "" {
+				if svc.Log == "" && svc.Command != "" {
 					suggested := filepath.Join(os.TempDir(), name+".log")
 					val := prompt(fmt.Sprintf("Log path [%s]: ", suggested))
 					if strings.TrimSpace(val) == "" {
@@ -346,9 +357,10 @@ func cmdAdd() *cobra.Command {
 	}
 	c.Flags().StringVar(&command, "command", "", "Path to binary")
 	c.Flags().IntVar(&port, "port", 0, "Listen port")
+	c.Flags().StringVar(&svcType, "type", "", "Service type (http/stdio)")
 	c.Flags().StringVar(&health, "health", "", "Health check URL")
 	c.Flags().StringVar(&dashboard, "dashboard", "", "Dashboard URL")
-	c.Flags().StringVar(&mcpURL, "mcp-url", "", "MCP URL for OpenCode remote entry")
+	c.Flags().StringVar(&mcpURL, "mcp-url", "", "MCP URL for remote registration")
 	c.Flags().StringVar(&logPath, "log", "", "Log file path")
 	c.Flags().StringVar(&buildCommand, "build-command", "", "Rebuild shell command")
 	c.Flags().StringArrayVar(&envPairs, "env", nil, "KEY=VAL (repeatable)")
@@ -389,6 +401,186 @@ func cmdConfigEdit() *cobra.Command {
 			c.Stdout = os.Stdout
 			c.Stderr = os.Stderr
 			return c.Run()
+		},
+	}
+}
+
+func cmdRemove() *cobra.Command {
+	var deregister bool
+	c := &cobra.Command{
+		Use:   "remove <service>",
+		Short: "Remove a service from config and deregister from all agents",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			cfg := mustConfig()
+			if _, err := cfg.ServiceNamed(name); err != nil {
+				return err
+			}
+			targets := agents.TargetsFromConfig(*cfg)
+			if deregister {
+				if err := agents.DeregisterAll(name, targets); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "  ⚠️  Deregistration failed: %v\n", err)
+				} else {
+					if targets.OpenCode {
+						fmt.Printf("  ✅ %s deregistered from OpenCode\n", name)
+					}
+					if targets.Cursor {
+						fmt.Printf("  ✅ %s deregistered from Cursor\n", name)
+					}
+				}
+			}
+			var remaining []config.ServiceConfig
+			for _, s := range cfg.Services {
+				if s.Name != name {
+					remaining = append(remaining, s)
+				}
+			}
+			cfg.Services = remaining
+			if err := config.SaveConfig(cfg); err != nil {
+				return err
+			}
+			fmt.Printf("Removed service %q\n", name)
+			return nil
+		},
+	}
+	c.Flags().BoolVar(&deregister, "deregister", true, "deregister from agents before removing")
+	return c
+}
+
+func cmdEdit() *cobra.Command {
+	return &cobra.Command{
+		Use:   "edit <service>",
+		Short: "Edit a service configuration (TUI)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			cfg := mustConfig()
+			svc, err := cfg.ServiceNamed(name)
+			if err != nil {
+				return err
+			}
+			if err := tui.RunServiceEditor(&svc); err != nil {
+				return err
+			}
+			for i := range cfg.Services {
+				if cfg.Services[i].Name == name {
+					cfg.Services[i] = svc
+					break
+				}
+			}
+			if err := config.SaveConfig(cfg); err != nil {
+				return err
+			}
+			fmt.Printf("Updated service %q\n", name)
+			return nil
+		},
+	}
+}
+
+func cmdRegistered() *cobra.Command {
+	return &cobra.Command{
+		Use:   "registered [service]",
+		Short: "Show which agents each service is registered with",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := mustConfig()
+			targets := agents.TargetsFromConfig(*cfg)
+			names := cfg.SortedNames()
+			if len(args) > 0 {
+				if _, err := cfg.ServiceNamed(args[0]); err != nil {
+					return err
+				}
+				names = []string{args[0]}
+			}
+			for _, name := range names {
+				ocRegistered := false
+				curRegistered := false
+				if targets.OpenCode {
+					ocRegistered = isRegisteredInFile(opencode.ConfigPath(), name)
+				}
+				if targets.Cursor {
+					curRegistered = isRegisteredInFile(cursor.ConfigPath(), name)
+				}
+				ocStr := "❌"
+				if ocRegistered {
+					ocStr = "✅"
+				}
+				curStr := "❌"
+				if curRegistered {
+					curStr = "✅"
+				}
+				fmt.Printf("%-24s  OpenCode: %s  Cursor: %s\n", name, ocStr, curStr)
+			}
+			return nil
+		},
+	}
+}
+
+func isRegisteredInFile(path, name string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return false
+	}
+	for _, key := range []string{"mcp", "mcpServers"} {
+		if block, ok := m[key].(map[string]interface{}); ok {
+			if _, exists := block[name]; exists {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func cmdValidate() *cobra.Command {
+	return &cobra.Command{
+		Use:   "validate",
+		Short: "Validate configuration for common issues",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := mustConfig()
+			errors := 0
+			warnings := 0
+			for _, svc := range cfg.Services {
+				prefix := fmt.Sprintf("[%s]", svc.Name)
+				if svc.Command == "" && svc.MCPURL == "" {
+					fmt.Fprintf(cmd.ErrOrStderr(), "%s ERROR: no command or mcp_url configured\n", prefix)
+					errors++
+				}
+				if svc.Command != "" {
+					expanded := config.ExpandPath(svc.Command)
+					if _, err := os.Stat(expanded); os.IsNotExist(err) {
+						fmt.Fprintf(cmd.ErrOrStderr(), "%s ERROR: command not found: %s\n", prefix, expanded)
+						errors++
+					}
+				}
+				for _, dep := range svc.Deps {
+					expanded := config.ExpandPath(dep)
+					if _, err := os.Stat(expanded); os.IsNotExist(err) {
+						fmt.Fprintf(cmd.ErrOrStderr(), "%s ERROR: dependency missing: %s\n", prefix, expanded)
+						errors++
+					}
+				}
+				if svc.Port > 0 && svc.Port < 1024 && svc.Port != 80 && svc.Port != 443 {
+					fmt.Fprintf(cmd.ErrOrStderr(), "%s WARNING: port %d may require root\n", prefix, svc.Port)
+					warnings++
+				}
+				if svc.MCPURL != "" && !strings.HasPrefix(svc.MCPURL, "http://") && !strings.HasPrefix(svc.MCPURL, "https://") {
+					fmt.Fprintf(cmd.ErrOrStderr(), "%s WARNING: mcp_url should start with http:// or https://\n", prefix)
+					warnings++
+				}
+			}
+			if errors == 0 && warnings == 0 {
+				fmt.Println("✅ Configuration is valid")
+			} else {
+				fmt.Printf("\n%d error(s), %d warning(s)\n", errors, warnings)
+			}
+			if errors > 0 {
+				return fmt.Errorf("validation failed")
+			}
+			return nil
 		},
 	}
 }

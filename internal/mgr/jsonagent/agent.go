@@ -14,11 +14,11 @@ type Writer func(path string, m map[string]interface{}) error
 type EntryConverter func(entry config.AgentEntry) map[string]interface{}
 
 type Agent struct {
-	configPath     string
-	blockKey       string
-	read           Reader
-	write          Writer
-	convertEntry   EntryConverter
+	configPath   string
+	blockKey     string
+	read         Reader
+	write        Writer
+	convertEntry EntryConverter
 }
 
 func New(configPath string, blockKey string, read Reader, write Writer, convert EntryConverter) Agent {
