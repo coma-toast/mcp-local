@@ -424,15 +424,15 @@ func cmdRemove() *cobra.Command {
 				if err := agents.DeregisterAll(name, targets); err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "  ⚠️  Deregistration failed: %v\n", err)
 				} else {
-				if targets.OpenCode {
-					fmt.Printf("  ✅ %s deregistered from OpenCode\n", name)
-				}
-				if targets.Cursor {
-					fmt.Printf("  ✅ %s deregistered from Cursor\n", name)
-				}
-				if targets.Claude {
-					fmt.Printf("  ✅ %s deregistered from Claude\n", name)
-				}
+					if targets.OpenCode {
+						fmt.Printf("  ✅ %s deregistered from OpenCode\n", name)
+					}
+					if targets.Cursor {
+						fmt.Printf("  ✅ %s deregistered from Cursor\n", name)
+					}
+					if targets.Claude {
+						fmt.Printf("  ✅ %s deregistered from Claude\n", name)
+					}
 				}
 			}
 			var remaining []config.ServiceConfig
@@ -599,7 +599,8 @@ func cmdValidate() *cobra.Command {
 }
 
 func cmdRegister() *cobra.Command {
-	return &cobra.Command{
+	var dryRun bool
+	c := &cobra.Command{
 		Use:   "register [service]",
 		Short: "Register service(s) with OpenCode, Cursor, and Claude",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -621,10 +622,11 @@ func cmdRegister() *cobra.Command {
 				}
 				toRegister = append(toRegister, svc)
 			}
-			if len(toRegister) > 0 {
-				if err := agents.RegisterAll(toRegister, targets); err != nil {
-					return err
-				}
+			if len(toRegister) == 0 {
+				return nil
+			}
+			if dryRun {
+				fmt.Println("[dry-run] Would register:")
 				for _, svc := range toRegister {
 					if targets.OpenCode {
 						fmt.Printf("  %-24s → opencode\n", svc.Name)
@@ -636,16 +638,34 @@ func cmdRegister() *cobra.Command {
 						fmt.Printf("  %-24s → claude\n", svc.Name)
 					}
 				}
+				return nil
+			}
+			if err := agents.RegisterAll(toRegister, targets); err != nil {
+				return err
+			}
+			for _, svc := range toRegister {
+				if targets.OpenCode {
+					fmt.Printf("  %-24s → opencode\n", svc.Name)
+				}
+				if targets.Cursor {
+					fmt.Printf("  %-24s → cursor\n", svc.Name)
+				}
+				if targets.Claude {
+					fmt.Printf("  %-24s → claude\n", svc.Name)
+				}
 			}
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&dryRun, "dry-run", false, "preview changes without writing")
+	return c
 }
 
 func cmdDeregister() *cobra.Command {
-	return &cobra.Command{
+	var dryRun bool
+	c := &cobra.Command{
 		Use:   "deregister [service]",
-		Short: "Remove MCP entries from OpenCode and Cursor configs",
+		Short: "Remove MCP entries from OpenCode, Cursor, and Claude configs",
 		Long:  "Without a service name: removes entries for services that have mcp_url and are not running. With a name: always removes that entry.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := mustConfig()
@@ -658,6 +678,7 @@ func cmdDeregister() *cobra.Command {
 				names = []string{args[0]}
 			}
 			targets := agents.TargetsFromConfig(*cfg)
+			var toDeregister []string
 			for _, name := range names {
 				svc, _ := cfg.ServiceNamed(name)
 				if svc.MCPURL == "" && svc.Command == "" {
@@ -667,6 +688,24 @@ func cmdDeregister() *cobra.Command {
 					fmt.Printf("  %-24s skipped (running)\n", name)
 					continue
 				}
+				toDeregister = append(toDeregister, name)
+			}
+			if dryRun {
+				fmt.Println("[dry-run] Would deregister:")
+				for _, name := range toDeregister {
+					if targets.OpenCode {
+						fmt.Printf("  %-24s ← opencode\n", name)
+					}
+					if targets.Cursor {
+						fmt.Printf("  %-24s ← cursor\n", name)
+					}
+					if targets.Claude {
+						fmt.Printf("  %-24s ← claude\n", name)
+					}
+				}
+				return nil
+			}
+			for _, name := range toDeregister {
 				if targets.OpenCode {
 					ok, err := opencode.Deregister(name)
 					if err != nil {
@@ -695,6 +734,8 @@ func cmdDeregister() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&dryRun, "dry-run", false, "preview changes without writing")
+	return c
 }
 
 func cmdLogsUnified() *cobra.Command {
