@@ -13,6 +13,7 @@ import (
 type AgentsConfig struct {
 	OpenCode bool `yaml:"opencode"`
 	Cursor   bool `yaml:"cursor"`
+	Claude   bool `yaml:"claude"`
 }
 
 type ServiceConfig struct {

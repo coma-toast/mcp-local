@@ -125,6 +125,9 @@ func registerStarted(cfg *config.ManagerConfig, started []config.ServiceConfig) 
 		if targets.Cursor {
 			fmt.Println("  ✅ Cursor registration complete")
 		}
+		if targets.Claude {
+			fmt.Println("  ✅ Claude registration complete")
+		}
 	}
 }
 

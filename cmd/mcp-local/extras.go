@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/coma-toast/mcp-local/internal/mgr/agents"
+	"github.com/coma-toast/mcp-local/internal/mgr/claudedesktop"
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
 	"github.com/coma-toast/mcp-local/internal/mgr/cursor"
 	"github.com/coma-toast/mcp-local/internal/mgr/logs"
@@ -113,6 +114,7 @@ func addCommands() {
 	rootCmd.AddCommand(cmdDeregister())
 	rootCmd.AddCommand(cmdRegistered())
 	rootCmd.AddCommand(cmdValidate())
+	rootCmd.AddCommand(cmdImport())
 
 	rootCmd.AddCommand(cmdLogsUnified())
 	rootCmd.AddCommand(cmdTools())
@@ -422,12 +424,15 @@ func cmdRemove() *cobra.Command {
 				if err := agents.DeregisterAll(name, targets); err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "  ⚠️  Deregistration failed: %v\n", err)
 				} else {
-					if targets.OpenCode {
-						fmt.Printf("  ✅ %s deregistered from OpenCode\n", name)
-					}
-					if targets.Cursor {
-						fmt.Printf("  ✅ %s deregistered from Cursor\n", name)
-					}
+				if targets.OpenCode {
+					fmt.Printf("  ✅ %s deregistered from OpenCode\n", name)
+				}
+				if targets.Cursor {
+					fmt.Printf("  ✅ %s deregistered from Cursor\n", name)
+				}
+				if targets.Claude {
+					fmt.Printf("  ✅ %s deregistered from Claude\n", name)
+				}
 				}
 			}
 			var remaining []config.ServiceConfig
@@ -495,11 +500,15 @@ func cmdRegistered() *cobra.Command {
 			for _, name := range names {
 				ocRegistered := false
 				curRegistered := false
+				claudeRegistered := false
 				if targets.OpenCode {
 					ocRegistered = isRegisteredInFile(opencode.ConfigPath(), name)
 				}
 				if targets.Cursor {
 					curRegistered = isRegisteredInFile(cursor.ConfigPath(), name)
+				}
+				if targets.Claude {
+					claudeRegistered = isRegisteredInFile(claudedesktop.ConfigPath(), name)
 				}
 				ocStr := "❌"
 				if ocRegistered {
@@ -509,7 +518,11 @@ func cmdRegistered() *cobra.Command {
 				if curRegistered {
 					curStr = "✅"
 				}
-				fmt.Printf("%-24s  OpenCode: %s  Cursor: %s\n", name, ocStr, curStr)
+				claudeStr := "❌"
+				if claudeRegistered {
+					claudeStr = "✅"
+				}
+				fmt.Printf("%-24s  OpenCode: %s  Cursor: %s  Claude: %s\n", name, ocStr, curStr, claudeStr)
 			}
 			return nil
 		},
@@ -588,7 +601,7 @@ func cmdValidate() *cobra.Command {
 func cmdRegister() *cobra.Command {
 	return &cobra.Command{
 		Use:   "register [service]",
-		Short: "Register service(s) with OpenCode and Cursor",
+		Short: "Register service(s) with OpenCode, Cursor, and Claude",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := mustConfig()
 			names := cfg.SortedNames()
@@ -618,6 +631,9 @@ func cmdRegister() *cobra.Command {
 					}
 					if targets.Cursor {
 						fmt.Printf("  %-24s → cursor\n", svc.Name)
+					}
+					if targets.Claude {
+						fmt.Printf("  %-24s → claude\n", svc.Name)
 					}
 				}
 			}
@@ -665,6 +681,14 @@ func cmdDeregister() *cobra.Command {
 						fmt.Fprintf(cmd.ErrOrStderr(), "  %-24s cursor ERROR: %v\n", name, err)
 					} else {
 						fmt.Printf("  %-24s cursor removed\n", name)
+					}
+				}
+				if targets.Claude {
+					err := claudedesktop.Deregister(name)
+					if err != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "  %-24s claude ERROR: %v\n", name, err)
+					} else {
+						fmt.Printf("  %-24s claude removed\n", name)
 					}
 				}
 			}
@@ -868,4 +892,114 @@ func fetchToolsList(mcpURL string) ([]config.ToolConfig, error) {
 		})
 	}
 	return tools, nil
+}
+
+func cmdImport() *cobra.Command {
+	var source string
+	c := &cobra.Command{
+		Use:   "import",
+		Short: "Import MCP configs from agents into config.yaml",
+		Long:  "Reads existing MCP configurations from OpenCode, Cursor, or Claude Desktop and imports them as services in config.yaml.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := mustConfig()
+			existing := make(map[string]bool)
+			for _, s := range cfg.Services {
+				existing[s.Name] = true
+			}
+			var imported int
+			sources := []string{"opencode", "cursor", "claude"}
+			if source != "" {
+				sources = []string{source}
+			}
+			for _, src := range sources {
+				var path string
+				var blockKey string
+				switch src {
+				case "opencode":
+					path = opencode.ConfigPath()
+					blockKey = "mcp"
+				case "cursor":
+					path = cursor.ConfigPath()
+					blockKey = "mcpServers"
+				case "claude":
+					path = claudedesktop.ConfigPath()
+					blockKey = "mcpServers"
+				}
+				data, err := os.ReadFile(path)
+				if err != nil {
+					continue
+				}
+				var m map[string]interface{}
+				if err := json.Unmarshal(data, &m); err != nil {
+					continue
+				}
+				block, _ := m[blockKey].(map[string]interface{})
+				if block == nil {
+					continue
+				}
+				for name, raw := range block {
+					if existing[name] {
+						continue
+					}
+					entry, _ := raw.(map[string]interface{})
+					if entry == nil {
+						continue
+					}
+					svc := config.ServiceConfig{Name: name}
+					entryType, _ := entry["type"].(string)
+					if entryType == "remote" || entryType == "http" {
+						svc.MCPType = "http"
+						if url, ok := entry["url"].(string); ok {
+							svc.MCPURL = url
+						}
+					} else if entryType == "local" || entryType == "stdio" || entryType == "" {
+						svc.MCPType = "stdio"
+						if cmdArr, ok := entry["command"].([]interface{}); ok {
+							if len(cmdArr) > 0 {
+								svc.Command, _ = cmdArr[0].(string)
+								for _, a := range cmdArr[1:] {
+									if s, ok := a.(string); ok {
+										svc.Args = append(svc.Args, s)
+									}
+								}
+							}
+						} else if cmdStr, ok := entry["command"].(string); ok {
+							svc.Command = cmdStr
+						}
+						if env, ok := entry["env"].(map[string]interface{}); ok {
+							svc.Env = make(map[string]string)
+							for k, v := range env {
+								svc.Env[k], _ = v.(string)
+							}
+						}
+						if env, ok := entry["environment"].(map[string]interface{}); ok {
+							if svc.Env == nil {
+								svc.Env = make(map[string]string)
+							}
+							for k, v := range env {
+								svc.Env[k], _ = v.(string)
+							}
+						}
+					}
+					if svc.Command != "" || svc.MCPURL != "" {
+						cfg.Services = append(cfg.Services, svc)
+						existing[name] = true
+						imported++
+						fmt.Printf("  Imported %s from %s\n", name, src)
+					}
+				}
+			}
+			if imported == 0 {
+				fmt.Println("No new services to import")
+				return nil
+			}
+			if err := config.SaveConfig(cfg); err != nil {
+				return err
+			}
+			fmt.Printf("\nImported %d service(s)\n", imported)
+			return nil
+		},
+	}
+	c.Flags().StringVar(&source, "from", "", "Source agent: opencode, cursor, or claude (default: all)")
+	return c
 }
