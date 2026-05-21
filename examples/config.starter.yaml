@@ -1,4 +1,5 @@
 # Starter ~/.mcp-local/config.yaml — ast-context-cache only.
+# Agent guide: AGENTS.md in the mcp-local repo.
 # Install: mkdir -p ~/.mcp-local && cp examples/config.starter.yaml ~/.mcp-local/config.yaml
 # Then: build once in ~/git/ast-context-cache (`make build`), adjust ONNXRUNTIME_LIB if needed, `mcp-local start ast-context-cache`
 #

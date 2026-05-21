@@ -12,6 +12,8 @@ When building an advanced AI agent setup, you often end up with a fragmented eco
 
 `mcp-local` solves this by treating your MCP infrastructure as code. You define your servers in a single portable config, and `mcp-local` handles the rest.
 
+**AI agents:** See [AGENTS.md](AGENTS.md) for command workflows, paths, ast-context-cache tool tiers, and what not to edit manually.
+
 ## Key Features
 
 ### Unified Lifecycle Management
@@ -146,6 +148,14 @@ mcp-local json tools ast-context-cache  # Preview tools.json overrides
 | `no_code_mode` | Injected as `AST_MCP_CODE_MODE=false` when true |
 | `tools_config_path` | Path to tools overrides JSON (default `~/.astcache/tools.json`) |
 | `tools` | Per-tool overrides (name, enabled, tier, description) → `tools.json` on start |
+
+## Documentation
+
+| Doc | Audience |
+|-----|----------|
+| [AGENTS.md](AGENTS.md) | AI coding assistants — commands, paths, workflows, limitations |
+| [docs/goal-alignment-plan.md](docs/goal-alignment-plan.md) | Implementation history and future catalog TUI |
+| [examples/](examples/) | Starter `config.yaml` and service snippets |
 
 ## Development
 
