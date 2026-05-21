@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
 	"syscall"
 
+	"github.com/coma-toast/mcp-local/internal/mgr/asttools"
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
 )
 
@@ -55,23 +55,14 @@ func StartService(cfg config.ServiceConfig) (*Process, error) {
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}
 
-	if cfg.ActiveTier != "" {
-		env = append(env, fmt.Sprintf("AST_MCP_TIER=%s", cfg.ActiveTier))
+	env, err = asttools.ApplyStartEnv(env, cfg)
+	if err != nil {
+		_ = logFile.Close()
+		return nil, err
 	}
-	if cfg.CodeMode {
-		env = append(env, "AST_MCP_CODE_MODE=true")
+	if cfg.NoCodeMode {
+		env = append(env, "AST_MCP_CODE_MODE=false")
 	}
-
-	var disabledTools []string
-	for _, t := range cfg.Tools {
-		if !t.Enabled {
-			disabledTools = append(disabledTools, t.Name)
-		}
-	}
-	if len(disabledTools) > 0 {
-		env = append(env, fmt.Sprintf("AST_MCP_DISABLED_TOOLS=%s", strings.Join(disabledTools, ",")))
-	}
-
 	cmd.Env = env
 
 	if runtime.GOOS != "windows" {

@@ -180,6 +180,7 @@ func (m toolModel) View() string {
 					cursor, style.Render(tool.Name), enabled, tool.Tier, tool.Description))
 			}
 			s.WriteString("\n(Left/Right: Toggle/Tier, Enter: Edit Desc, Backspace: Back)")
+			s.WriteString("\nAfter save: mcp-local tools apply " + svc.Name + " && mcp-local restart " + svc.Name)
 		}
 
 	case descEditState:

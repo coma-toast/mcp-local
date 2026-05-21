@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/coma-toast/mcp-local/internal/mgr/agents"
+	"github.com/coma-toast/mcp-local/internal/mgr/asttools"
 	"github.com/coma-toast/mcp-local/internal/mgr/claudedesktop"
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
 	"github.com/coma-toast/mcp-local/internal/mgr/cursor"
@@ -118,6 +119,7 @@ func addCommands() {
 
 	rootCmd.AddCommand(cmdLogsUnified())
 	rootCmd.AddCommand(cmdTools())
+	rootCmd.AddCommand(cmdJSON())
 }
 
 func cmdList() *cobra.Command {
@@ -778,6 +780,61 @@ func cmdTools() *cobra.Command {
 		},
 	}
 	cmd.AddCommand(cmdToolsSync())
+	cmd.AddCommand(cmdToolsApply())
+	return cmd
+}
+
+func cmdToolsApply() *cobra.Command {
+	return &cobra.Command{
+		Use:   "apply <service>",
+		Short: "Write ~/.astcache/tools.json from config (restart service to load)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := mustConfig()
+			svc, err := cfg.ServiceNamed(args[0])
+			if err != nil {
+				return err
+			}
+			if len(svc.Tools) == 0 {
+				return fmt.Errorf("no tools configured for %s (run tools sync first)", args[0])
+			}
+			path := asttools.ToolsConfigPath(svc)
+			if err := asttools.WriteToolsJSON(path, svc.Tools); err != nil {
+				return err
+			}
+			fmt.Printf("Wrote %s (%d tool overrides)\n", path, asttools.OverridesCount(svc.Tools))
+			fmt.Printf("Restart %s to apply: mcp-local restart %s\n", args[0], args[0])
+			return nil
+		},
+	}
+}
+
+func cmdJSON() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "json",
+		Short: "Emit JSON artifacts from config",
+	}
+	cmd.AddCommand(&cobra.Command{
+		Use:   "tools <service>",
+		Short: "Print tools.json overrides for a service",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := mustConfig()
+			svc, err := cfg.ServiceNamed(args[0])
+			if err != nil {
+				return err
+			}
+			if len(svc.Tools) == 0 {
+				return fmt.Errorf("no tools configured for %s", args[0])
+			}
+			b, err := asttools.MarshalOverrides(svc.Tools)
+			if err != nil {
+				return err
+			}
+			fmt.Println(string(b))
+			return nil
+		},
+	})
 	return cmd
 }
 

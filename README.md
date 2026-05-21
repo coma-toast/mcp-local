@@ -15,31 +15,33 @@ When building an advanced AI agent setup, you often end up with a fragmented eco
 ## Key Features
 
 ### Unified Lifecycle Management
-- `mcp-local start <service>` or `mcp-local start --all` — launches and registers with OpenCode and Cursor.
+- `mcp-local start <service>` or `mcp-local start --all` — launches and registers with OpenCode, Cursor, and Claude Desktop (configurable).
 - `mcp-local stop <service>` / `stop --all`, `restart <service>` / `restart --all`.
 - `mcp-local stop --deregister` (default) — removes agent entries when stopping.
 - `mcp-local rebuild <service>` — runs `build_command` and re-registers.
 - `mcp-local status` — bubbletea live table; `mcp-local status --plain` for scripting.
 - stdio services detected via PID file (not just port).
 
-### Dual Agent Registration
-On `start` / `restart` / `register`, services are registered with both:
+### Agent registration
+On `start` / `restart` / `register`, services are registered with enabled agents:
 - **OpenCode**: `~/.config/opencode/opencode.jsonc` — HTTP as `remote`, stdio as `local`.
 - **Cursor**: `~/.cursor/mcp.json` — HTTP as `{ "url": "..." }`, stdio as `{ "command": "...", "args": [...], "env": {...} }`.
+- **Claude Desktop**: `claude_desktop_config.json` — same shape as Cursor.
 
-Control which agents receive registrations via top-level config:
 ```yaml
 agents:
   opencode: true
   cursor: true
+  claude: true
 ```
 
-### Tool & Tier Management
+### Tool & Tier Management (ast-context-cache)
+- `mcp-local tools sync <service>` — fetch tool list from a running MCP server via `tools/list`.
 - `mcp-local tools` — TUI to enable/disable tools, change tiers, edit descriptions.
-- `mcp-local tools sync <service>` — fetches tool list from a running MCP server via `tools/list` and populates config.
-- On start, `active_tier` and `code_mode` are injected as `AST_MCP_TIER` / `AST_MCP_CODE_MODE` env vars.
-- Disabled tools are passed as `AST_MCP_DISABLED_TOOLS=tool1,tool2` env var.
-- Restart services after changing tool settings to apply.
+- `mcp-local tools apply <service>` — write overrides to `~/.astcache/tools.json` (or `tools_config_path`).
+- `mcp-local json tools <service>` — print the tools.json overrides that would be written.
+- On start: `AST_MCP_TIER`, optional `AST_MCP_CODE_MODE`, and `AST_MCP_TOOLS_CONFIG` when tools are configured.
+- **Restart** the service after changing tool settings (ast-mcp reads `tools.json` at startup only).
 
 ### Portable Configuration
 All settings in `~/.mcp-local/config.yaml`. Sync across machines via Dropbox, iCloud, or Git.
@@ -118,6 +120,8 @@ mcp-local stop --all           # Stop and deregister (default)
 mcp-local stop --all --deregister=false  # Stop without deregistering
 mcp-local register             # Register all services with agents
 mcp-local deregister           # Remove entries for stopped services
+mcp-local tools apply ast-context-cache   # Write tools.json overrides
+mcp-local json tools ast-context-cache  # Preview tools.json overrides
 ```
 
 ## Config Reference
@@ -139,7 +143,9 @@ mcp-local deregister           # Remove entries for stopped services
 | `deps` | Required file paths (checked before start) |
 | `active_tier` | Injected as `AST_MCP_TIER` env var |
 | `code_mode` | Injected as `AST_MCP_CODE_MODE=true` when true |
-| `tools` | Per-tool config (name, enabled, tier, description) |
+| `no_code_mode` | Injected as `AST_MCP_CODE_MODE=false` when true |
+| `tools_config_path` | Path to tools overrides JSON (default `~/.astcache/tools.json`) |
+| `tools` | Per-tool overrides (name, enabled, tier, description) → `tools.json` on start |
 
 ## Development
 
