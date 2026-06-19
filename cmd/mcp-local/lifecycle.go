@@ -88,6 +88,20 @@ func startServices(cfg *config.ManagerConfig, names []string, cmd *cobra.Command
 			started = append(started, svc)
 			continue
 		}
+		if svc.MCPType == "filesystem" {
+			p, err := process.StartEmbedded(svc)
+			if err != nil {
+				fmt.Printf("  ❌ %s: %v\n", name, err)
+				continue
+			}
+			process.SavePID(name, p.PID)
+			fmt.Printf("  ✅ %s started (in-process, PID %d)\n", name, p.PID)
+			if svc.Port > 0 && !portutil.WaitForPort(svc.Port, portWait) {
+				fmt.Fprintf(cmd.ErrOrStderr(), "  ⚠️  %s: port %d not listening yet\n", name, svc.Port)
+			}
+			started = append(started, svc)
+			continue
+		}
 		svcForStart := svc
 		if !config.ShouldBuildOnStart(svcForStart) {
 			svcForStart.BuildCmd = ""
@@ -136,6 +150,8 @@ func addLifecycle() {
 	start := &cobra.Command{
 		Use:   "start [service]",
 		Short: "Start service(s) and register with agents",
+		Example: `  mcp-local start my-server
+  mcp-local start --all`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := mustConfig()
 			names, err := resolveTargets(cfg, args, startAll, "start")
@@ -158,6 +174,9 @@ func addLifecycle() {
 	stop := &cobra.Command{
 		Use:   "stop [service]",
 		Short: "Stop service(s)",
+		Example: `  mcp-local stop my-server
+  mcp-local stop --all
+  mcp-local stop --deregister=false my-server`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := mustConfig()
 			names, err := resolveTargets(cfg, args, stopAll, "stop")
@@ -181,6 +200,8 @@ func addLifecycle() {
 	restart := &cobra.Command{
 		Use:   "restart [service]",
 		Short: "Restart service(s)",
+		Example: `  mcp-local restart my-server
+  mcp-local restart --all`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := mustConfig()
 			names, err := resolveTargets(cfg, args, restartAll, "restart")

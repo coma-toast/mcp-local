@@ -22,6 +22,7 @@ import (
 	"github.com/coma-toast/mcp-local/internal/mgr/claudedesktop"
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
 	"github.com/coma-toast/mcp-local/internal/mgr/cursor"
+	"github.com/coma-toast/mcp-local/internal/mgr/embedfs"
 	"github.com/coma-toast/mcp-local/internal/mgr/logs"
 	"github.com/coma-toast/mcp-local/internal/mgr/opencode"
 	"github.com/coma-toast/mcp-local/internal/portutil"
@@ -39,6 +40,9 @@ func addCommands() {
 	status := &cobra.Command{
 		Use:   "status [service]",
 		Short: "Live status table (q to quit); use --plain for one-shot",
+		Example: `  mcp-local status
+  mcp-local status --plain
+  mcp-local status my-server`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := mustConfig()
 			filter := ""
@@ -61,6 +65,8 @@ func addCommands() {
 	health := &cobra.Command{
 		Use:   "health [service]",
 		Short: "GET health_url for service(s)",
+		Example: `  mcp-local health
+  mcp-local health my-server`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := mustConfig()
 			names := cfg.SortedNames()
@@ -120,12 +126,14 @@ func addCommands() {
 	rootCmd.AddCommand(cmdLogsUnified())
 	rootCmd.AddCommand(cmdTools())
 	rootCmd.AddCommand(cmdJSON())
+	rootCmd.AddCommand(cmdServeFS())
 }
 
 func cmdList() *cobra.Command {
 	return &cobra.Command{
-		Use:   "list",
-		Short: "List configured services",
+		Use:     "list",
+		Short:   "List configured services",
+		Example: `  mcp-local list`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := mustConfig()
 			if len(cfg.Services) == 0 {
@@ -142,9 +150,10 @@ func cmdList() *cobra.Command {
 
 func cmdLog() *cobra.Command {
 	return &cobra.Command{
-		Use:   "log <service>",
-		Short: "Tail the service log file",
-		Args:  cobra.ExactArgs(1),
+		Use:     "log <service>",
+		Short:   "Tail the service log file",
+		Args:    cobra.ExactArgs(1),
+		Example: `  mcp-local log my-server`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := mustConfig()
 			svc, err := cfg.ServiceNamed(args[0])
@@ -187,9 +196,10 @@ func cmdLog() *cobra.Command {
 
 func cmdOpen() *cobra.Command {
 	return &cobra.Command{
-		Use:   "open <service>",
-		Short: "Open dashboard_url in a browser",
-		Args:  cobra.ExactArgs(1),
+		Use:     "open <service>",
+		Short:   "Open dashboard_url in a browser",
+		Args:    cobra.ExactArgs(1),
+		Example: `  mcp-local open my-server`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := mustConfig()
 			svc, err := cfg.ServiceNamed(args[0])
@@ -210,9 +220,10 @@ func cmdOpen() *cobra.Command {
 
 func cmdRebuild() *cobra.Command {
 	return &cobra.Command{
-		Use:   "rebuild <service>",
-		Short: "Run build_cmd / build_command for a service",
-		Args:  cobra.ExactArgs(1),
+		Use:     "rebuild <service>",
+		Short:   "Run build_cmd / build_command for a service",
+		Args:    cobra.ExactArgs(1),
+		Example: `  mcp-local rebuild my-server`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := mustConfig()
 			svc, err := cfg.ServiceNamed(args[0])
@@ -248,23 +259,28 @@ func cmdRebuild() *cobra.Command {
 }
 
 func cmdAdd() *cobra.Command {
-  var (
-    command      string
-    port         int
-    svcType      string
-    health       string
-    dashboard    string
-    mcpURL       string
-    logPath      string
-    buildCommand string
-    envPairs     []string
-    cmdArgs      []string
-    path         string
-  )
+	var (
+		command      string
+		port         int
+		svcType      string
+		health       string
+		dashboard    string
+		mcpURL       string
+		logPath      string
+		buildCommand string
+		envPairs     []string
+		cmdArgs      []string
+		path         string
+	)
 	c := &cobra.Command{
 		Use:   "add <name>",
 		Short: "Add or update a service",
 		Args:  cobra.ExactArgs(1),
+		Example: `  mcp-local add github --type stdio --command npx --args "-y" --args "@modelcontextprotocol/server-github" --env GITHUB_TOKEN=ghp_xxxx
+  mcp-local add filesystem --type filesystem --path ~/projects --port 4000
+  mcp-local add playwright --type stdio --command npx --args "-y" --args "@playwright/mcp"
+  mcp-local add fetch --type stdio --command uvx --args "mcp-server-fetch"
+  mcp-local add remote-api --type http --mcp-url https://api.example.com/mcp --health https://api.example.com/health`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			cfg := mustConfig()
@@ -300,6 +316,9 @@ func cmdAdd() *cobra.Command {
 			if cmd.Flags().Changed("build-command") {
 				svc.BuildCommand = buildCommand
 			}
+			if cmd.Flags().Changed("path") {
+				svc.Path = path
+			}
 			if cmd.Flags().Changed("args") {
 				svc.Args = cmdArgs
 			}
@@ -315,12 +334,17 @@ func cmdAdd() *cobra.Command {
 				}
 			}
 			if isNew {
-				if svc.Command == "" && svc.MCPURL == "" {
+				if svc.MCPType == "filesystem" {
+					if svc.Port == 0 {
+						portStr := prompt("Port: ")
+						svc.Port, _ = strconv.Atoi(strings.TrimSpace(portStr))
+					}
+				} else if svc.Command == "" && svc.MCPURL == "" {
 					svc.Command = prompt("Command (path to binary, or empty for remote-only): ")
 				}
-if svc.MCPType == "" {
-    svc.MCPType = prompt("Type (http, stdio, filesystem, or empty to auto-detect): ")
-}
+				if svc.MCPType == "" {
+					svc.MCPType = prompt("Type (http, stdio, filesystem, or empty to auto-detect): ")
+				}
 				if svc.Command == "" && svc.Port == 0 && svc.MCPURL == "" {
 					mcpURL := prompt("MCP URL (for remote-only service): ")
 					svc.MCPURL = strings.TrimSpace(mcpURL)
@@ -346,12 +370,12 @@ if svc.MCPType == "" {
 					} else {
 						svc.Log = strings.TrimSpace(val)
 					}
-               }
-              }
-              if svc.MCPType == "filesystem" && strings.TrimSpace(svc.Path) == "" {
-                  return fmt.Errorf("when type=filesystem, path must be provided")
-              }
-              cfg.UpsertService(svc)
+				}
+			}
+			if svc.MCPType == "filesystem" && strings.TrimSpace(svc.Path) == "" {
+				return fmt.Errorf("when type=filesystem, path must be provided")
+			}
+			cfg.UpsertService(svc)
 			if err := config.SaveConfig(cfg); err != nil {
 				return err
 			}
@@ -369,11 +393,11 @@ if svc.MCPType == "" {
 	c.Flags().StringVar(&health, "health", "", "Health check URL")
 	c.Flags().StringVar(&dashboard, "dashboard", "", "Dashboard URL")
 	c.Flags().StringVar(&mcpURL, "mcp-url", "", "MCP URL for remote registration")
-c.Flags().StringVar(&logPath, "log", "", "Log file path")
-c.Flags().StringVar(&path, "path", "", "Path to filesystem root (used when type=filesystem)")
-c.Flags().StringVar(&buildCommand, "build-command", "", "Rebuild shell command")
-c.Flags().StringArrayVar(&envPairs, "env", nil, "KEY=VAL (repeatable)")
-c.Flags().StringArrayVar(&cmdArgs, "args", nil, "Binary args (repeatable)")
+	c.Flags().StringVar(&logPath, "log", "", "Log file path")
+	c.Flags().StringVar(&path, "path", "", "Path to filesystem root (used when type=filesystem)")
+	c.Flags().StringVar(&buildCommand, "build-command", "", "Rebuild shell command")
+	c.Flags().StringArrayVar(&envPairs, "env", nil, "KEY=VAL (repeatable)")
+	c.Flags().StringArrayVar(&cmdArgs, "args", nil, "Binary args (repeatable)")
 	return c
 }
 
@@ -386,8 +410,9 @@ func prompt(label string) string {
 
 func cmdConfigEdit() *cobra.Command {
 	return &cobra.Command{
-		Use:   "config",
-		Short: "Open ~/.mcp-local/config.yaml in $EDITOR",
+		Use:     "config",
+		Short:   "Open ~/.mcp-local/config.yaml in $EDITOR",
+		Example: `  mcp-local config`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p, err := config.GetConfigPath()
 			if err != nil {
@@ -420,6 +445,8 @@ func cmdRemove() *cobra.Command {
 		Use:   "remove <service>",
 		Short: "Remove a service from config and deregister from all agents",
 		Args:  cobra.ExactArgs(1),
+		Example: `  mcp-local remove my-server
+  mcp-local remove my-server --deregister=false`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			cfg := mustConfig()
@@ -462,9 +489,10 @@ func cmdRemove() *cobra.Command {
 
 func cmdEdit() *cobra.Command {
 	return &cobra.Command{
-		Use:   "edit <service>",
-		Short: "Edit a service configuration (TUI)",
-		Args:  cobra.ExactArgs(1),
+		Use:     "edit <service>",
+		Short:   "Edit a service configuration (TUI)",
+		Args:    cobra.ExactArgs(1),
+		Example: `  mcp-local edit my-server`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			cfg := mustConfig()
@@ -494,6 +522,8 @@ func cmdRegistered() *cobra.Command {
 	return &cobra.Command{
 		Use:   "registered [service]",
 		Short: "Show which agents each service is registered with",
+		Example: `  mcp-local registered
+  mcp-local registered my-server`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := mustConfig()
 			targets := agents.TargetsFromConfig(*cfg)
@@ -557,8 +587,9 @@ func isRegisteredInFile(path, name string) bool {
 
 func cmdValidate() *cobra.Command {
 	return &cobra.Command{
-		Use:   "validate",
-		Short: "Validate configuration for common issues",
+		Use:     "validate",
+		Short:   "Validate configuration for common issues",
+		Example: `  mcp-local validate`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := mustConfig()
 			errors := 0
@@ -610,6 +641,9 @@ func cmdRegister() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "register [service]",
 		Short: "Register service(s) with OpenCode, Cursor, and Claude",
+		Example: `  mcp-local register
+  mcp-local register my-server
+  mcp-local register --dry-run`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := mustConfig()
 			names := cfg.SortedNames()
@@ -674,6 +708,9 @@ func cmdDeregister() *cobra.Command {
 		Use:   "deregister [service]",
 		Short: "Remove MCP entries from OpenCode, Cursor, and Claude configs",
 		Long:  "Without a service name: removes entries for services that have mcp_url and are not running. With a name: always removes that entry.",
+		Example: `  mcp-local deregister
+  mcp-local deregister my-server
+  mcp-local deregister --dry-run`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := mustConfig()
 			force := len(args) > 0
@@ -747,8 +784,9 @@ func cmdDeregister() *cobra.Command {
 
 func cmdLogsUnified() *cobra.Command {
 	return &cobra.Command{
-		Use:   "logs",
-		Short: "Tail logs for all services (Ctrl+C to stop)",
+		Use:     "logs",
+		Short:   "Tail logs for all services (Ctrl+C to stop)",
+		Example: `  mcp-local logs`,
 		Run: func(cmd *cobra.Command, args []string) {
 			cfg := mustConfig()
 			var entries []logs.Entry
@@ -776,6 +814,9 @@ func cmdTools() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "tools",
 		Short: "Manage tool tiers (TUI)",
+		Example: `  mcp-local tools sync my-server
+  mcp-local tools apply my-server
+  mcp-local json tools my-server`,
 		Run: func(cmd *cobra.Command, args []string) {
 			cfg := mustConfig()
 			if err := tui.RunToolManager(cfg); err != nil {
@@ -791,9 +832,10 @@ func cmdTools() *cobra.Command {
 
 func cmdToolsApply() *cobra.Command {
 	return &cobra.Command{
-		Use:   "apply <service>",
-		Short: "Write ~/.astcache/tools.json from config (restart service to load)",
-		Args:  cobra.ExactArgs(1),
+		Use:     "apply <service>",
+		Short:   "Write ~/.astcache/tools.json from config (restart service to load)",
+		Args:    cobra.ExactArgs(1),
+		Example: `  mcp-local tools apply my-server`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := mustConfig()
 			svc, err := cfg.ServiceNamed(args[0])
@@ -816,13 +858,15 @@ func cmdToolsApply() *cobra.Command {
 
 func cmdJSON() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "json",
-		Short: "Emit JSON artifacts from config",
+		Use:     "json",
+		Short:   "Emit JSON artifacts from config",
+		Example: `  mcp-local json tools my-server`,
 	}
 	cmd.AddCommand(&cobra.Command{
-		Use:   "tools <service>",
-		Short: "Print tools.json overrides for a service",
-		Args:  cobra.ExactArgs(1),
+		Use:     "tools <service>",
+		Short:   "Print tools.json overrides for a service",
+		Args:    cobra.ExactArgs(1),
+		Example: `  mcp-local json tools my-server`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := mustConfig()
 			svc, err := cfg.ServiceNamed(args[0])
@@ -845,9 +889,10 @@ func cmdJSON() *cobra.Command {
 
 func cmdToolsSync() *cobra.Command {
 	return &cobra.Command{
-		Use:   "sync <service>",
-		Short: "Sync tools list from a running MCP server",
-		Args:  cobra.ExactArgs(1),
+		Use:     "sync <service>",
+		Short:   "Sync tools list from a running MCP server",
+		Args:    cobra.ExactArgs(1),
+		Example: `  mcp-local tools sync my-server`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := mustConfig()
 			svc, err := cfg.ServiceNamed(args[0])
@@ -990,7 +1035,7 @@ func fetchToolsList(mcpURL string) ([]config.ToolConfig, error) {
 			Name:        t.Name,
 			Description: t.Description,
 			Enabled:     true,
-			Tier:        "core",
+			Tier:        "",
 			InputSchema: t.InputSchema,
 		})
 	}
@@ -1003,6 +1048,10 @@ func cmdImport() *cobra.Command {
 		Use:   "import",
 		Short: "Import MCP configs from agents into config.yaml",
 		Long:  "Reads existing MCP configurations from OpenCode, Cursor, or Claude Desktop and imports them as services in config.yaml.",
+		Example: `  mcp-local import
+  mcp-local import --from opencode
+  mcp-local import --from cursor
+  mcp-local import --from claude`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := mustConfig()
 			existing := make(map[string]bool)
@@ -1104,5 +1153,31 @@ func cmdImport() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&source, "from", "", "Source agent: opencode, cursor, or claude (default: all)")
+	return c
+}
+
+func cmdServeFS() *cobra.Command {
+	var name, logPath, root string
+	var port int
+	c := &cobra.Command{
+		Use:    "_serve-fs",
+		Short:  "Start an embedded filesystem MCP server (internal)",
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if name == "" || port == 0 || root == "" {
+				return fmt.Errorf("usage: _serve-fs --name <name> --port <port> --path <path> [--log <log>]")
+			}
+			embedfs.LogTo(logPath, fmt.Sprintf("%s: starting embedfs on port %d (root: %s)", name, port, root))
+			if err := embedfs.New(root).Serve(port, logPath); err != nil {
+				embedfs.LogTo(logPath, fmt.Sprintf("%s: server error: %v", name, err))
+				return err
+			}
+			return nil
+		},
+	}
+	c.Flags().StringVar(&name, "name", "", "Service name")
+	c.Flags().IntVar(&port, "port", 0, "Listen port")
+	c.Flags().StringVar(&root, "path", "", "Filesystem root path")
+	c.Flags().StringVar(&logPath, "log", "", "Log file path")
 	return c
 }

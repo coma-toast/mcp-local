@@ -15,6 +15,14 @@ var rootCmd = &cobra.Command{
 	Short: "Local MCP Service Manager",
 	Long: `mcp-local is a unified control plane for managing multiple local MCP servers,
 lifecycle, OpenCode registration, and tool configuration.`,
+	Example: `  mcp-local add github --type stdio --command npx --args "-y" --args "@modelcontextprotocol/server-github" --env GITHUB_TOKEN=ghp_xxxx
+  mcp-local add filesystem --type filesystem --path ~/projects --port 4000
+  mcp-local add playwright --type stdio --command npx --args "-y" --args "@playwright/mcp"
+  mcp-local add fetch --type stdio --command uvx --args "mcp-server-fetch"
+  mcp-local add remote-api --type http --mcp-url https://api.example.com/mcp --health https://api.example.com/health
+  mcp-local start --all
+  mcp-local status --plain
+  mcp-local register --dry-run`,
 }
 
 func main() {

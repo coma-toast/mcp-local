@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/coma-toast/mcp-local/internal/mgr/asttools"
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
 )
 
@@ -91,7 +92,8 @@ func (m toolModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cfg.Services[m.svcIdx].Tools[m.cursor].Enabled = !m.cfg.Services[m.svcIdx].Tools[m.cursor].Enabled
 			case "right", "l":
 				tiers := []string{"core", "extended", "complete"}
-				currentTier := m.cfg.Services[m.svcIdx].Tools[m.cursor].Tier
+				tool := &m.cfg.Services[m.svcIdx].Tools[m.cursor]
+				currentTier := asttools.EffectiveTierForDisplay(tool.Name, tool.Tier)
 				nextIdx := 0
 				for i, t := range tiers {
 					if t == currentTier {
@@ -99,7 +101,7 @@ func (m toolModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						break
 					}
 				}
-				m.cfg.Services[m.svcIdx].Tools[m.cursor].Tier = tiers[nextIdx]
+				tool.Tier = tiers[nextIdx]
 			case "enter":
 				m.toolIdx = m.cursor
 				m.input.SetValue(m.cfg.Services[m.svcIdx].Tools[m.cursor].Description)
@@ -176,8 +178,12 @@ func (m toolModel) View() string {
 					enabled = "✅"
 				}
 
+				tierLabel := tool.Tier
+				if tierLabel == "" {
+					tierLabel = asttools.EffectiveTierForDisplay(tool.Name, "") + " (builtin)"
+				}
 				s.WriteString(fmt.Sprintf("%s%s %-10s %-15s %s\n",
-					cursor, style.Render(tool.Name), enabled, tool.Tier, tool.Description))
+					cursor, style.Render(tool.Name), enabled, tierLabel, tool.Description))
 			}
 			s.WriteString("\n(Left/Right: Toggle/Tier, Enter: Edit Desc, Backspace: Back)")
 			s.WriteString("\nAfter save: mcp-local tools apply " + svc.Name + " && mcp-local restart " + svc.Name)

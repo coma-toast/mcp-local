@@ -228,7 +228,7 @@ flowchart LR
 
 ## Future work (not in original plan Phases A–F)
 
-- **Tier defaults on sync:** seed `tier` from ast compiled defaults (today sync defaults all tools to `core`)
+- ~~**Tier defaults on sync**~~ — sync leaves `tier` empty in YAML; only explicit overrides are written to `tools.json` (`DefaultBuiltinTier` used for TUI display/cycle)
 - **JSONC comment preservation** on OpenCode write (read strips `//`, write is plain JSON)
 - **Cursor reload note** in README — registration is file-only; users may need to reload MCP in Cursor
 - **catalog-tui** / **registry-enrichment** — see Phase G and mcpservers.org section above
