@@ -248,18 +248,19 @@ func cmdRebuild() *cobra.Command {
 }
 
 func cmdAdd() *cobra.Command {
-	var (
-		command      string
-		port         int
-		svcType      string
-		health       string
-		dashboard    string
-		mcpURL       string
-		logPath      string
-		buildCommand string
-		envPairs     []string
-		cmdArgs      []string
-	)
+  var (
+    command      string
+    port         int
+    svcType      string
+    health       string
+    dashboard    string
+    mcpURL       string
+    logPath      string
+    buildCommand string
+    envPairs     []string
+    cmdArgs      []string
+    path         string
+  )
 	c := &cobra.Command{
 		Use:   "add <name>",
 		Short: "Add or update a service",
@@ -317,9 +318,9 @@ func cmdAdd() *cobra.Command {
 				if svc.Command == "" && svc.MCPURL == "" {
 					svc.Command = prompt("Command (path to binary, or empty for remote-only): ")
 				}
-				if svc.MCPType == "" {
-					svc.MCPType = prompt("Type (http/stdio, or empty to auto-detect): ")
-				}
+if svc.MCPType == "" {
+    svc.MCPType = prompt("Type (http, stdio, filesystem, or empty to auto-detect): ")
+}
 				if svc.Command == "" && svc.Port == 0 && svc.MCPURL == "" {
 					mcpURL := prompt("MCP URL (for remote-only service): ")
 					svc.MCPURL = strings.TrimSpace(mcpURL)
@@ -345,9 +346,12 @@ func cmdAdd() *cobra.Command {
 					} else {
 						svc.Log = strings.TrimSpace(val)
 					}
-				}
-			}
-			cfg.UpsertService(svc)
+               }
+              }
+              if svc.MCPType == "filesystem" && strings.TrimSpace(svc.Path) == "" {
+                  return fmt.Errorf("when type=filesystem, path must be provided")
+              }
+              cfg.UpsertService(svc)
 			if err := config.SaveConfig(cfg); err != nil {
 				return err
 			}
@@ -361,14 +365,15 @@ func cmdAdd() *cobra.Command {
 	}
 	c.Flags().StringVar(&command, "command", "", "Path to binary")
 	c.Flags().IntVar(&port, "port", 0, "Listen port")
-	c.Flags().StringVar(&svcType, "type", "", "Service type (http/stdio)")
+	c.Flags().StringVar(&svcType, "type", "", "Service type (http, stdio, filesystem)")
 	c.Flags().StringVar(&health, "health", "", "Health check URL")
 	c.Flags().StringVar(&dashboard, "dashboard", "", "Dashboard URL")
 	c.Flags().StringVar(&mcpURL, "mcp-url", "", "MCP URL for remote registration")
-	c.Flags().StringVar(&logPath, "log", "", "Log file path")
-	c.Flags().StringVar(&buildCommand, "build-command", "", "Rebuild shell command")
-	c.Flags().StringArrayVar(&envPairs, "env", nil, "KEY=VAL (repeatable)")
-	c.Flags().StringArrayVar(&cmdArgs, "args", nil, "Binary args (repeatable)")
+c.Flags().StringVar(&logPath, "log", "", "Log file path")
+c.Flags().StringVar(&path, "path", "", "Path to filesystem root (used when type=filesystem)")
+c.Flags().StringVar(&buildCommand, "build-command", "", "Rebuild shell command")
+c.Flags().StringArrayVar(&envPairs, "env", nil, "KEY=VAL (repeatable)")
+c.Flags().StringArrayVar(&cmdArgs, "args", nil, "Binary args (repeatable)")
 	return c
 }
 

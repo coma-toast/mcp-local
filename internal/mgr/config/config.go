@@ -17,26 +17,27 @@ type AgentsConfig struct {
 }
 
 type ServiceConfig struct {
-	Name            string            `yaml:"name"`
-	Command         string            `yaml:"command"`
-	Args            []string          `yaml:"args"`
-	Env             map[string]string `yaml:"env"`
-	Port            int               `yaml:"port"`
-	MCPType         string            `yaml:"type"`
-	BuildCmd        string            `yaml:"build_cmd"`
-	BuildCommand    string            `yaml:"build_command,omitempty"`
-	NoBuildOnStart  bool              `yaml:"no_build_on_start,omitempty"`
-	Deps            []string          `yaml:"deps"`
-	Description     string            `yaml:"description"`
-	Tools           []ToolConfig      `yaml:"tools"`
-	HealthURL       string            `yaml:"health_url,omitempty"`
-	DashboardURL    string            `yaml:"dashboard_url,omitempty"`
-	MCPURL          string            `yaml:"mcp_url,omitempty"`
-	Log             string            `yaml:"log,omitempty"`
-	ActiveTier      string            `yaml:"active_tier,omitempty"`
-	CodeMode        bool              `yaml:"code_mode,omitempty"`
-	NoCodeMode      bool              `yaml:"no_code_mode,omitempty"`
-	ToolsConfigPath string            `yaml:"tools_config_path,omitempty"`
+    Name            string            `yaml:"name"`
+    Command         string            `yaml:"command"`
+    Args            []string          `yaml:"args"`
+    Env             map[string]string `yaml:"env"`
+    Port            int               `yaml:"port"`
+    MCPType         string            `yaml:"type"`
+    BuildCmd        string            `yaml:"build_cmd"`
+    BuildCommand    string            `yaml:"build_command,omitempty"`
+    NoBuildOnStart  bool              `yaml:"no_build_on_start,omitempty"`
+    Deps            []string          `yaml:"deps"`
+    Description     string            `yaml:"description"`
+    Tools           []ToolConfig      `yaml:"tools"`
+    HealthURL       string            `yaml:"health_url,omitempty"`
+    DashboardURL    string            `yaml:"dashboard_url,omitempty"`
+    MCPURL          string            `yaml:"mcp_url,omitempty"`
+    Log             string            `yaml:"log,omitempty"`
+    ActiveTier      string            `yaml:"active_tier,omitempty"`
+    CodeMode        bool              `yaml:"code_mode,omitempty"`
+    NoCodeMode      bool              `yaml:"no_code_mode,omitempty"`
+    ToolsConfigPath string            `yaml:"tools_config_path,omitempty"`
+    Path            string            `yaml:"path,omitempty"`
 }
 
 type ToolConfig struct {
