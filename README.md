@@ -22,9 +22,14 @@ When building an advanced AI agent setup, you often end up with a fragmented eco
 - `mcp-local stop --deregister` (default) — removes agent entries when stopping.
 - `mcp-local rebuild <service>` — runs `build_command` and re-registers.
 - `mcp-local status` — bubbletea live table; `mcp-local status --plain` for scripting.
+- `mcp-local health <service>` — GET `health_url` for service(s).
+- `mcp-local logs` — tail unified logs for all services (Ctrl+C to stop).
+- `mcp-local log <service>` — tail individual service log.
 - stdio services detected via PID file (not just port).
+- Supports **remote-only** services (no local binary, just `mcp_url`).
+- Supports **filesystem** embedded MCP server (`type: filesystem`).
 
-### Agent registration
+### Agent Registration
 On `start` / `restart` / `register`, services are registered with enabled agents:
 - **OpenCode**: `~/.config/opencode/opencode.jsonc` — HTTP as `remote`, stdio as `local`.
 - **Cursor**: `~/.cursor/mcp.json` — HTTP as `{ "url": "..." }`, stdio as `{ "command": "...", "args": [...], "env": {...} }`.
@@ -44,6 +49,20 @@ agents:
 - `mcp-local json tools <service>` — print the tools.json overrides that would be written.
 - On start: `AST_MCP_TIER`, optional `AST_MCP_CODE_MODE`, and `AST_MCP_TOOLS_CONFIG` when tools are configured.
 - **Restart** the service after changing tool settings (ast-mcp reads `tools.json` at startup only).
+
+### Configuration Management
+- `mcp-local add <name>` — add or update a service (interactive prompts for new services).
+- `mcp-local edit <service>` — TUI editor for service configuration.
+- `mcp-local remove <service>` — remove from config and deregister from agents.
+- `mcp-local config` — open `~/.mcp-local/config.yaml` in `$EDITOR`.
+- `mcp-local validate` — validate configuration for common issues (missing binaries, deps, ports).
+- `mcp-local import` — import MCP configs from OpenCode, Cursor, or Claude Desktop.
+- `mcp-local list` — list configured service names.
+
+### Monitoring & Debugging
+- `mcp-local open <service>` — open `dashboard_url` in browser.
+- `mcp-local registered [service]` — show which agents each service is registered with.
+- `mcp-local deregister [service]` — remove entries for stopped services (or force by name).
 
 ### Portable Configuration
 All settings in `~/.mcp-local/config.yaml`. Sync across machines via Dropbox, iCloud, or Git.
@@ -109,21 +128,59 @@ services:
     args:
       - --config
       - ${HOME}/.config/model-proxy/config.yaml
+
+  - name: remote-api
+    type: http
+    mcp_url: https://api.example.com/mcp
+    health_url: https://api.example.com/health
+
+  - name: my-files
+    type: filesystem
+    path: ~/projects
+    port: 4000
 ```
 
 ### Usage
 ```bash
+# Lifecycle
 mcp-local start --all          # Start and register with all agents
-mcp-local status               # Live table (q to quit)
-mcp-local status --plain       # One-shot text output
-mcp-local tools sync ast-context-cache   # Fetch tools from running server
-mcp-local tools                # Tool tier TUI
 mcp-local stop --all           # Stop and deregister (default)
 mcp-local stop --all --deregister=false  # Stop without deregistering
-mcp-local register             # Register all services with agents
+mcp-local restart my-server    # Restart a service
+mcp-local rebuild my-server    # Run build_command and re-register
+
+# Status & Monitoring
+mcp-local status               # Live table (q to quit)
+mcp-local status --plain       # One-shot text output
+mcp-local health               # Health check all services
+mcp-local health my-server     # Health check one service
+mcp-local logs                 # Tail all logs (Ctrl+C to stop)
+mcp-local log my-server        # Tail one service's log
+mcp-local open my-server       # Open dashboard in browser
+
+# Agent Registration
+mcp-local register             # Register all services
+mcp-local register my-server   # Register one service
+mcp-local register --dry-run   # Preview what would be registered
 mcp-local deregister           # Remove entries for stopped services
-mcp-local tools apply ast-context-cache   # Write tools.json overrides
-mcp-local json tools ast-context-cache  # Preview tools.json overrides
+mcp-local deregister my-server # Force remove one service
+mcp-local registered           # Show registration status per agent
+
+# Configuration
+mcp-local list                 # List configured service names
+mcp-local add github --type stdio --command npx --args "-y" --args "@modelcontextprotocol/server-github" --env GITHUB_TOKEN=ghp_xxxx
+mcp-local add filesystem --type filesystem --path ~/projects --port 4000
+mcp-local edit my-server       # TUI editor
+mcp-local config               # Edit config.yaml in $EDITOR
+mcp-local validate             # Validate config
+mcp-local import               # Import from all agents
+mcp-local import --from opencode
+
+# Tool & Tier Management (ast-context-cache)
+mcp-local tools sync ast-context-cache   # Fetch tools from running server
+mcp-local tools                          # Tool tier TUI
+mcp-local tools apply ast-context-cache  # Write tools.json overrides
+mcp-local json tools ast-context-cache   # Preview tools.json overrides
 ```
 
 ## Config Reference
@@ -134,7 +191,7 @@ mcp-local json tools ast-context-cache  # Preview tools.json overrides
 | `command` | Path to binary (supports `${HOME}` and `~/`) |
 | `args` | Command-line arguments |
 | `port` | TCP listen port (omit for stdio) |
-| `type` | `http` or `stdio` |
+| `type` | `http`, `stdio`, or `filesystem` |
 | `mcp_url` | MCP endpoint URL for remote registration |
 | `health_url` | HTTP health check endpoint |
 | `dashboard_url` | Web dashboard URL |
@@ -143,11 +200,13 @@ mcp-local json tools ast-context-cache  # Preview tools.json overrides
 | `build_command` | Shell command to build the service |
 | `no_build_on_start` | Skip build on `start` (default: false, i.e. build runs) |
 | `deps` | Required file paths (checked before start) |
+| `description` | Human-readable description |
 | `active_tier` | Injected as `AST_MCP_TIER` env var |
 | `code_mode` | Injected as `AST_MCP_CODE_MODE=true` when true |
 | `no_code_mode` | Injected as `AST_MCP_CODE_MODE=false` when true |
 | `tools_config_path` | Path to tools overrides JSON (default `~/.astcache/tools.json`) |
 | `tools` | Per-tool overrides (name, enabled, tier, description) → `tools.json` on start |
+| `path` | Filesystem root path (required when `type: filesystem`) |
 
 ## Documentation
 
@@ -168,4 +227,5 @@ make check  # test + vet + fmt
 CI runs `go test ./...`, `go vet`, and `go build` on push/PR.
 
 ## License
+
 MIT
