@@ -61,3 +61,16 @@ func TestWaitForPort_Success(t *testing.T) {
 		t.Errorf("WaitForPort should succeed for listening port %d", port)
 	}
 }
+
+func TestIsRunning_IPv6LoopbackOnly(t *testing.T) {
+	ln, err := net.Listen("tcp", "[::1]:0")
+	if err != nil {
+		t.Skipf("IPv6 loopback unavailable: %v", err)
+	}
+	defer ln.Close()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	if !IsRunning(port) {
+		t.Errorf("IsRunning(%d) should be true for [::1]-only listener", port)
+	}
+}
