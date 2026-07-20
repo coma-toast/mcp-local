@@ -102,6 +102,20 @@ func startServices(cfg *config.ManagerConfig, names []string, cmd *cobra.Command
 			started = append(started, svc)
 			continue
 		}
+		// Remote-only: no local binary — just register when mcp_url is set.
+		if svc.Command == "" {
+			if svc.MCPURL == "" {
+				fmt.Printf("  ❌ %s: no command or mcp_url configured\n", name)
+				continue
+			}
+			if svc.Port > 0 {
+				fmt.Printf("  ⚠️  %s: remote-only; nothing listening on port %d (start the external server)\n", name, svc.Port)
+			} else {
+				fmt.Printf("  ⏭️  %s: remote-only (%s)\n", name, svc.MCPURL)
+			}
+			started = append(started, svc)
+			continue
+		}
 		svcForStart := svc
 		if !config.ShouldBuildOnStart(svcForStart) {
 			svcForStart.BuildCmd = ""

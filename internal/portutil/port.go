@@ -14,12 +14,21 @@ func IsRunning(port int) bool {
 	if port <= 0 {
 		return false
 	}
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 500*time.Millisecond)
-	if err != nil {
-		return false
+	// Probe both loopback stacks — many Node/Vite servers (e.g. Slidev) bind
+	// [::1] only, while older services listen on 127.0.0.1.
+	addrs := []string{
+		fmt.Sprintf("127.0.0.1:%d", port),
+		fmt.Sprintf("[::1]:%d", port),
 	}
-	_ = conn.Close()
-	return true
+	for _, addr := range addrs {
+		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+		if err != nil {
+			continue
+		}
+		_ = conn.Close()
+		return true
+	}
+	return false
 }
 
 func FindPID(port int) int {
