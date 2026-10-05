@@ -2,7 +2,7 @@ package main
 
 import (
 	"bufio"
-	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/coma-toast/mcp-local/internal/bridge"
 	"github.com/coma-toast/mcp-local/internal/mgr/agents"
 	"github.com/coma-toast/mcp-local/internal/mgr/asttools"
 	"github.com/coma-toast/mcp-local/internal/mgr/claudedesktop"
@@ -929,14 +930,14 @@ func cmdToolsSync() *cobra.Command {
 
 type jsonRPCRequest struct {
 	JSONRPC string      `json:"jsonrpc"`
-	ID      int         `json:"id"`
+	ID      *int        `json:"id,omitempty"`
 	Method  string      `json:"method"`
 	Params  interface{} `json:"params,omitempty"`
 }
 
 type jsonRPCResponse struct {
-	JSONRPC string `json:"jsonrpc"`
-	ID      int    `json:"id"`
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
 	Result  struct {
 		Tools []struct {
 			Name        string                 `json:"name"`
@@ -950,62 +951,60 @@ type jsonRPCResponse struct {
 	} `json:"error,omitempty"`
 }
 
+const mcpClientProtocolVersion = "2025-06-18"
+
+func intPtr(i int) *int { return &i }
+
+// rpcCall POSTs req and returns the response whose id matches (JSON or SSE body).
+// Notifications (nil ID) return a nil response.
+func rpcCall(ctx context.Context, c *bridge.Client, req jsonRPCRequest) (*jsonRPCResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	var resp *jsonRPCResponse
+	err = c.Post(ctx, body, func(msg []byte) error {
+		var r jsonRPCResponse
+		if json.Unmarshal(msg, &r) == nil && req.ID != nil && string(r.ID) == strconv.Itoa(*req.ID) {
+			resp = &r
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if req.ID != nil && resp == nil {
+		return nil, fmt.Errorf("%s: no response", req.Method)
+	}
+	if resp != nil && resp.Error != nil {
+		return nil, fmt.Errorf("%s error: %s", req.Method, resp.Error.Message)
+	}
+	return resp, nil
+}
+
 func fetchToolsList(mcpURL string) ([]config.ToolConfig, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	initReq := jsonRPCRequest{
+	ctx := context.Background()
+	c := &bridge.Client{URL: mcpURL, Timeout: 10 * time.Second}
+	defer c.Delete(ctx)
+	_, err := rpcCall(ctx, c, jsonRPCRequest{
 		JSONRPC: "2.0",
-		ID:      1,
+		ID:      intPtr(1),
 		Method:  "initialize",
 		Params: map[string]interface{}{
-			"protocolVersion": "2024-11-05",
+			"protocolVersion": mcpClientProtocolVersion,
+			"capabilities":    map[string]interface{}{},
 			"clientInfo":      map[string]string{"name": "mcp-local", "version": "0.1.0"},
 		},
-	}
-	initBody, _ := json.Marshal(initReq)
-	resp, err := client.Post(mcpURL, "application/json", bytes.NewReader(initBody))
+	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("initialize: %w", err)
 	}
-	var initResp jsonRPCResponse
-	if err := json.NewDecoder(resp.Body).Decode(&initResp); err != nil {
-		resp.Body.Close()
-		return nil, fmt.Errorf("initialize response: %w", err)
-	}
-	resp.Body.Close()
-	if initResp.Error != nil {
-		return nil, fmt.Errorf("initialize error: %s", initResp.Error.Message)
-	}
-
-	initializedReq := jsonRPCRequest{
-		JSONRPC: "2.0",
-		Method:  "notifications/initialized",
-	}
-	initializedBody, _ := json.Marshal(initializedReq)
-	resp, err = client.Post(mcpURL, "application/json", bytes.NewReader(initializedBody))
-	if err != nil {
+	if _, err := rpcCall(ctx, c, jsonRPCRequest{JSONRPC: "2.0", Method: "notifications/initialized"}); err != nil {
 		return nil, fmt.Errorf("send initialized notification: %w", err)
 	}
-	_, _ = io.Copy(io.Discard, resp.Body)
-	resp.Body.Close()
-
-	toolsReq := jsonRPCRequest{
-		JSONRPC: "2.0",
-		ID:      2,
-		Method:  "tools/list",
-	}
-	toolsBody, _ := json.Marshal(toolsReq)
-	resp, err = client.Post(mcpURL, "application/json", bytes.NewReader(toolsBody))
+	rpcResp, err := rpcCall(ctx, c, jsonRPCRequest{JSONRPC: "2.0", ID: intPtr(2), Method: "tools/list"})
 	if err != nil {
 		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var rpcResp jsonRPCResponse
-	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
-		return nil, err
-	}
-	if rpcResp.Error != nil {
-		return nil, fmt.Errorf("MCP error: %s", rpcResp.Error.Message)
 	}
 	var tools []config.ToolConfig
 	for _, t := range rpcResp.Result.Tools {

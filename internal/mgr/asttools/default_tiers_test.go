@@ -3,17 +3,28 @@ package asttools
 import "testing"
 
 func TestDefaultBuiltinTier(t *testing.T) {
-	if DefaultBuiltinTier("get_context_capsule") != "core" {
-		t.Fatal("expected core")
+	tests := map[string]string{
+		"get_context_capsule":    "core",
+		"diff_impact":            "core",
+		"check_symbol_exists":    "core",
+		"check_deletion_safety":  "core",
+		"fetch_context":          "core",
+		"recall_memory":          "core",
+		"handoff":                "core",
+		"open_handoff":           "core",
+		"scratchpad":             "core",
+		"index_files":            "extended",
+		"store_context":          "extended",
+		"store_memory":           "extended",
+		"fetch_doc":              "extended",
+		"report_kv_repair_event": "extended",
+		"execute_code":           "complete",
+		"unknown_tool":           "",
 	}
-	if DefaultBuiltinTier("index_files") != "extended" {
-		t.Fatal("expected extended")
-	}
-	if DefaultBuiltinTier("execute_code") != "complete" {
-		t.Fatal("expected complete")
-	}
-	if DefaultBuiltinTier("unknown_tool") != "" {
-		t.Fatal("unknown should be empty")
+	for name, want := range tests {
+		if got := DefaultBuiltinTier(name); got != want {
+			t.Errorf("DefaultBuiltinTier(%q) = %q, want %q", name, got, want)
+		}
 	}
 }
 

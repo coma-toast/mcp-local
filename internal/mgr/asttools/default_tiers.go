@@ -6,13 +6,17 @@ package asttools
 func DefaultBuiltinTier(name string) string {
 	switch name {
 	case "get_context_capsule", "index_status", "search_semantic", "get_project_map",
-		"get_file_context", "get_impact_graph", "search_docs", "list_doc_sources", "retrieve":
+		"get_file_context", "get_impact_graph", "diff_impact", "check_symbol_exists",
+		"check_deletion_safety", "search_docs", "list_doc_sources", "retrieve",
+		"fetch_context", "list_context", "search_context", "recall_memory",
+		"handoff", "open_handoff", "scratchpad":
 		return "core"
 	case "execute_code":
 		return "complete"
 	case "index_files", "cache_summary", "analyze_dead_code", "analyze_complexity",
-		"export_bundle", "import_bundle", "add_doc_source", "remove_doc_source",
-		"update_doc_source":
+		"export_bundle", "import_bundle", "fetch_doc", "add_doc_source", "remove_doc_source",
+		"update_doc_source", "store_context", "flush_context", "store_memory",
+		"forget_memory", "report_kv_repair_event":
 		return "extended"
 	default:
 		return ""

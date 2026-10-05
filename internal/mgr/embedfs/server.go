@@ -73,12 +73,13 @@ type rpcError struct {
 }
 
 func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
 	if r.Method != http.MethodPost {
-		writeError(w, nil, -32700, "Method not allowed")
+		// No GET SSE stream or session DELETE: 405 per the Streamable HTTP transport.
+		w.Header().Set("Allow", http.MethodPost)
+		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -92,30 +93,22 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var resp jsonRPCResp
-	switch req.Method {
-	case "initialize":
-		resp = s.handleInitialize(req)
-	case "notifications/initialized":
-		resp = jsonRPCResp{
-			JSONRPC: "2.0",
-		}
-	default:
-		if req.ID == nil {
-			resp = jsonRPCResp{JSONRPC: "2.0"}
-		} else {
-			resp = s.handleToolCall(req)
-		}
-	}
-
-	if resp.ID == nil && req.ID != nil {
-		resp.ID = parseID(req.ID)
-	}
-
-	if resp.ID == nil && resp.Error == nil && resp.Result == nil {
+	// Notifications (no id) and client responses (no method) get 202 with no body.
+	if len(req.ID) == 0 || req.Method == "" {
+		w.Header().Del("Content-Type")
+		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 
+	var resp jsonRPCResp
+	if req.Method == "initialize" {
+		resp = s.handleInitialize(req)
+	} else {
+		resp = s.handleToolCall(req)
+	}
+	if resp.ID == nil {
+		resp.ID = parseID(req.ID)
+	}
 	json.NewEncoder(w).Encode(resp)
 }
 
