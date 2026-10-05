@@ -4,12 +4,13 @@ Guidance for AI coding assistants operating on or through **mcp-local**, the loc
 
 ## What this tool is
 
-**mcp-local** supervises local MCP server processes and keeps agent editor configs in sync. It is **not** an MCP server and does **not** implement MCP JSON-RPC (`tools/list`, etc.)—those belong to the servers it starts (e.g. ast-context-cache).
+**mcp-local** supervises local MCP server processes and keeps agent editor configs in sync. It is **not** an MCP server—tools (`tools/list`, etc.) belong to the servers it starts (e.g. ast-context-cache). The one transport piece it implements is `mcp-local bridge <url>`, a stdio ↔ Streamable HTTP relay for hosts that can only launch stdio servers (Claude Desktop).
 
 | Responsibility | mcp-local | MCP server (e.g. ast-mcp) |
 |----------------|-----------|---------------------------|
 | Start/stop/restart binaries | Yes | N/A |
-| Register `mcp.json` / `opencode.jsonc` | Yes | N/A |
+| Register `mcp.json` / `opencode.jsonc` / Claude Desktop | Yes (delegates to `ast-mcp install` for ast-context-cache v4+) | `ast-mcp install` |
+| stdio → HTTP relay (`mcp-local bridge`) | Yes | Serves Streamable HTTP |
 | Tool tier policy file (`tools.json`) | Writes from config | Reads at startup |
 | Serve MCP over HTTP/stdio | No | Yes |
 
@@ -22,7 +23,8 @@ Guidance for AI coding assistants operating on or through **mcp-local**, the loc
 | `~/.astcache/tools.json` | Per-tool `enabled` / `tier` / `description` for ast-context-cache |
 | `~/.cursor/mcp.json` | Cursor MCP entries (`mcpServers`) |
 | `~/.config/opencode/opencode.jsonc` (or `.json`) | OpenCode MCP entries (`mcp`) |
-| Claude Desktop config | OS-specific; see `internal/mgr/claudedesktop` |
+| Claude Desktop config | OS-specific `claude_desktop_config.json`; see `internal/mgr/claudedesktop` |
+| `~/.mcp-local/backups/<YYYYMMDD-HHMMSS>/` | Original agent config before each mcp-local edit (path `/` → `%`, last 5 kept per file) |
 
 Build output: `./bin/mcp-local` after `make` in this repo.
 
@@ -30,7 +32,7 @@ Build output: `./bin/mcp-local` after `make` in this repo.
 
 **Prefer mcp-local** when the user’s stack is already defined in `config.yaml` or they want lifecycle + registration in one place.
 
-**Do not** hand-edit `~/.cursor/mcp.json` or OpenCode MCP blocks for services that mcp-local manages—changes will be overwritten on the next `start`, `restart`, or `register`.
+**Do not** hand-edit the entries mcp-local manages in `~/.cursor/mcp.json`, OpenCode's `mcp` block, or Claude Desktop's `mcpServers`—they are overwritten on the next `start`, `restart`, or `register`. Everything else in those files (other servers, comments, formatting) is left untouched: mcp-local patches only `<block>/<service name>` and writes atomically after a backup.
 
 **Do** use shell commands below; use `mcp-local status --plain` and `mcp-local validate` before assuming a service is up.
 
@@ -79,6 +81,27 @@ agents:
 ```
 
 If all three are `false`, mcp-local still defaults to registering OpenCode + Cursor + Claude (legacy behavior).
+
+Entry shapes per host:
+
+| Host | HTTP service | stdio service |
+|------|--------------|---------------|
+| OpenCode (`mcp`) | `{"type":"remote","url":…,"enabled":true,"timeout":30000}` | `{"type":"local","command":[…],"environment":{…}}` |
+| Cursor (`mcpServers`) | `{"url":…}` | `{"command":…,"args":[…],"env":{…}}` |
+| Claude Desktop (`mcpServers`) | `{"command":"<abs path>/mcp-local","args":["bridge",<mcp_url>]}` | `{"type":"stdio","command":…,"args":[…],"env":{…}}` |
+
+Claude Desktop cannot connect to HTTP servers itself, so HTTP services run through `mcp-local bridge`.
+
+**ast-context-cache delegation:** services whose `command` basename is `ast-mcp` get `installer: ast-mcp` (set `installer: native` to opt out). For those HTTP services, register/deregister run `<command> install|uninstall --target <opencode|cursor|claude_desktop> --component mcp --yes --json --mcp-url <mcp_url>` instead of mcp-local's writers. If `<command> --version` is below 4.0.0 (or fails), or the installer exits 4 (unsupported), mcp-local falls back to its own writer and prints a warning. Errors from any host are collected and reported together; other hosts still get updated.
+
+### stdio bridge
+
+```bash
+mcp-local bridge http://localhost:7821/mcp                         # stdin/stdout JSON-RPC ↔ Streamable HTTP
+mcp-local bridge https://host/mcp --header "Authorization=Bearer …" --timeout 120s
+```
+
+Newline-delimited JSON-RPC on stdin is POSTed to the URL (`Accept: application/json, text/event-stream`); JSON and SSE responses come back one message per stdout line. It keeps `Mcp-Session-Id` / `MCP-Protocol-Version`, forwards the server's GET SSE stream when offered, turns HTTP failures on requests into JSON-RPC errors (`code -32000`), exits 0 on stdin EOF (sending DELETE for the session), and logs only to stderr.
 
 ### ast-context-cache tool tiers
 
@@ -160,7 +183,8 @@ mcp-local registered my-server
 
 ## Limitations (do not promise otherwise)
 
-- **OpenCode JSONC:** reads strip `//` comments; writes plain JSON (comments may be lost).
+- **JSONC:** comments, trailing commas, key order, and formatting are preserved; only mcp-local's own entries are rewritten.
+- **Entry names:** deregistration removes only an entry whose name exactly equals the service name. Delegated `ast-mcp install` entries are named by ast-mcp, so `mcp-local registered` may not see them under a different service name.
 - **Catalog browse:** `mcp-local browse` / MCP Registry install TUI is **not** implemented yet (see [docs/goal-alignment-plan.md](docs/goal-alignment-plan.md)).
 - **Remote OAuth MCPs:** registration may work in agent JSON; mcp-local does not run OAuth flows.
 - **Cursor env for HTTP tier:** HTTP entries use `url` only; tier for Cursor may require manual `env` in `mcp.json` if not using stdio.

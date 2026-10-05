@@ -4,13 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
 	"github.com/coma-toast/mcp-local/internal/mgr/jsonagent"
 )
-
-var stripLineComments = regexp.MustCompile(`(?m)^\s*//.*$`)
 
 func ConfigPath() string {
 	home, _ := os.UserHomeDir()
@@ -21,14 +18,8 @@ func ConfigPath() string {
 	return filepath.Join(home, ".config", "opencode", "opencode.json")
 }
 
-func readFn(path string) (map[string]interface{}, error) {
-	return jsonagent.ReadJSONC(path, func(raw []byte) []byte {
-		return stripLineComments.ReplaceAll(raw, []byte{})
-	})
-}
-
 func newAgent() jsonagent.Agent {
-	return jsonagent.New(ConfigPath(), "mcp", readFn, jsonagent.WriteJSON, entryToOpenCode)
+	return jsonagent.New(ConfigPath(), "mcp", entryToOpenCode)
 }
 
 func entryToOpenCode(entry config.AgentEntry) map[string]interface{} {
@@ -63,13 +54,6 @@ func RegisterLocal(name string, command []string, env map[string]string) error {
 	if len(command) == 0 {
 		return fmt.Errorf("empty command for %q", name)
 	}
-	m, err := readFn(ConfigPath())
-	if os.IsNotExist(err) {
-		m = map[string]interface{}{}
-	} else if err != nil {
-		return err
-	}
-	block := newAgent().EnsureBlock(m)
 	entry := map[string]interface{}{
 		"type":    "local",
 		"command": command,
@@ -78,9 +62,7 @@ func RegisterLocal(name string, command []string, env map[string]string) error {
 	if len(env) > 0 {
 		entry["environment"] = env
 	}
-	block[name] = entry
-	m["mcp"] = block
-	return jsonagent.WriteJSON(ConfigPath(), m)
+	return newAgent().SetEntries(map[string]map[string]interface{}{name: entry})
 }
 
 func Deregister(name string) (bool, error) {
