@@ -38,7 +38,15 @@ type ServiceConfig struct {
 	NoCodeMode      bool              `yaml:"no_code_mode,omitempty"`
 	ToolsConfigPath string            `yaml:"tools_config_path,omitempty"`
 	Path            string            `yaml:"path,omitempty"`
+	// Installer delegates agent registration to the service's own CLI ("ast-mcp"),
+	// or "native" to force mcp-local's writers. Empty = auto-detect from command.
+	Installer string `yaml:"installer,omitempty"`
 }
+
+const (
+	InstallerASTMCP = "ast-mcp"
+	InstallerNative = "native"
+)
 
 type ToolConfig struct {
 	Name        string                 `yaml:"name"`
@@ -56,6 +64,33 @@ type ManagerConfig struct {
 func (s ServiceConfig) IsHTTP() bool {
 	t := strings.ToLower(strings.TrimSpace(s.MCPType))
 	return t == "http" || (s.Port > 0 && t != "stdio")
+}
+
+// EffectiveInstaller returns the installer that owns agent registration for s
+// ("" means mcp-local's native writers).
+func (s ServiceConfig) EffectiveInstaller() string {
+	switch inst := strings.TrimSpace(s.Installer); inst {
+	case InstallerNative:
+		return ""
+	case "":
+		if filepath.Base(strings.TrimSpace(s.Command)) == InstallerASTMCP {
+			return InstallerASTMCP
+		}
+		return ""
+	default:
+		return inst
+	}
+}
+
+// MCPEndpoint is the HTTP MCP URL for s (mcp_url, else http://localhost:<port>/mcp), or "".
+func (s ServiceConfig) MCPEndpoint() string {
+	if u := strings.TrimSpace(s.MCPURL); u != "" {
+		return u
+	}
+	if s.Port > 0 {
+		return fmt.Sprintf("http://localhost:%d/mcp", s.Port)
+	}
+	return ""
 }
 
 func EffectiveBuild(s ServiceConfig) string {
@@ -77,6 +112,9 @@ func ExpandService(s *ServiceConfig) {
 	s.Log = ExpandPath(s.Log)
 	s.Path = ExpandPath(s.Path)
 	s.ToolsConfigPath = ExpandPath(s.ToolsConfigPath)
+	if s.Installer == "" {
+		s.Installer = s.EffectiveInstaller()
+	}
 	for i := range s.Deps {
 		s.Deps[i] = ExpandPath(s.Deps[i])
 	}

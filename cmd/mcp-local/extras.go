@@ -2,7 +2,7 @@ package main
 
 import (
 	"bufio"
-	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,12 +17,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/coma-toast/mcp-local/internal/bridge"
 	"github.com/coma-toast/mcp-local/internal/mgr/agents"
 	"github.com/coma-toast/mcp-local/internal/mgr/asttools"
 	"github.com/coma-toast/mcp-local/internal/mgr/claudedesktop"
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
 	"github.com/coma-toast/mcp-local/internal/mgr/cursor"
 	"github.com/coma-toast/mcp-local/internal/mgr/embedfs"
+	"github.com/coma-toast/mcp-local/internal/mgr/jsonagent"
 	"github.com/coma-toast/mcp-local/internal/mgr/logs"
 	"github.com/coma-toast/mcp-local/internal/mgr/opencode"
 	"github.com/coma-toast/mcp-local/internal/portutil"
@@ -127,6 +129,7 @@ func addCommands() {
 	rootCmd.AddCommand(cmdTools())
 	rootCmd.AddCommand(cmdJSON())
 	rootCmd.AddCommand(cmdServeFS())
+	rootCmd.AddCommand(cmdBridge())
 }
 
 func cmdList() *cobra.Command {
@@ -244,13 +247,10 @@ func cmdRebuild() *cobra.Command {
 			fmt.Printf("%s: rebuild complete\n", args[0])
 			targets := agents.TargetsFromConfig(*cfg)
 			if err := agents.RegisterAll([]config.ServiceConfig{svc}, targets); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "  ⚠️  Registration failed: %v\n", err)
+				fmt.Fprintf(cmd.ErrOrStderr(), "  ⚠️  Registration failed:\n%s\n", indent(err.Error()))
 			} else {
-				if targets.OpenCode {
-					fmt.Printf("  ✅ opencode: registered %s\n", args[0])
-				}
-				if targets.Cursor {
-					fmt.Printf("  ✅ cursor: registered %s\n", args[0])
+				for _, host := range targets.Hosts() {
+					fmt.Printf("  ✅ %s: registered %s\n", host, args[0])
 				}
 			}
 			return nil
@@ -453,21 +453,9 @@ func cmdRemove() *cobra.Command {
 			if _, err := cfg.ServiceNamed(name); err != nil {
 				return err
 			}
-			targets := agents.TargetsFromConfig(*cfg)
 			if deregister {
-				if err := agents.DeregisterAll(name, targets); err != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "  ⚠️  Deregistration failed: %v\n", err)
-				} else {
-					if targets.OpenCode {
-						fmt.Printf("  ✅ %s deregistered from OpenCode\n", name)
-					}
-					if targets.Cursor {
-						fmt.Printf("  ✅ %s deregistered from Cursor\n", name)
-					}
-					if targets.Claude {
-						fmt.Printf("  ✅ %s deregistered from Claude\n", name)
-					}
-				}
+				svc, _ := cfg.ServiceNamed(name)
+				deregisterHosts(cmd, svc, agents.TargetsFromConfig(*cfg))
 			}
 			var remaining []config.ServiceConfig
 			for _, s := range cfg.Services {
@@ -571,8 +559,8 @@ func isRegisteredInFile(path, name string) bool {
 	if err != nil {
 		return false
 	}
-	var m map[string]interface{}
-	if err := json.Unmarshal(data, &m); err != nil {
+	m, err := jsonagent.ParseJSONC(data)
+	if err != nil {
 		return false
 	}
 	for _, key := range []string{"mcp", "mcpServers"} {
@@ -750,36 +738,27 @@ func cmdDeregister() *cobra.Command {
 				return nil
 			}
 			for _, name := range toDeregister {
-				if targets.OpenCode {
-					ok, err := opencode.Deregister(name)
-					if err != nil {
-						fmt.Fprintf(cmd.ErrOrStderr(), "  %-24s opencode ERROR: %v\n", name, err)
-					} else if ok {
-						fmt.Printf("  %-24s opencode removed\n", name)
-					}
-				}
-				if targets.Cursor {
-					err := cursor.Deregister(name)
-					if err != nil {
-						fmt.Fprintf(cmd.ErrOrStderr(), "  %-24s cursor ERROR: %v\n", name, err)
-					} else {
-						fmt.Printf("  %-24s cursor removed\n", name)
-					}
-				}
-				if targets.Claude {
-					err := claudedesktop.Deregister(name)
-					if err != nil {
-						fmt.Fprintf(cmd.ErrOrStderr(), "  %-24s claude ERROR: %v\n", name, err)
-					} else {
-						fmt.Printf("  %-24s claude removed\n", name)
-					}
-				}
+				svc, _ := cfg.ServiceNamed(name)
+				deregisterHosts(cmd, svc, targets)
 			}
 			return nil
 		},
 	}
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "preview changes without writing")
 	return c
+}
+
+// deregisterHosts removes svc from each enabled host, reporting only entries actually removed.
+func deregisterHosts(cmd *cobra.Command, svc config.ServiceConfig, targets agents.Targets) {
+	for _, host := range targets.Hosts() {
+		found, err := agents.Deregister(svc, host)
+		switch {
+		case err != nil:
+			fmt.Fprintf(cmd.ErrOrStderr(), "  %-24s %s ERROR: %v\n", svc.Name, host, err)
+		case found:
+			fmt.Printf("  %-24s %s removed\n", svc.Name, host)
+		}
+	}
 }
 
 func cmdLogsUnified() *cobra.Command {
@@ -951,14 +930,14 @@ func cmdToolsSync() *cobra.Command {
 
 type jsonRPCRequest struct {
 	JSONRPC string      `json:"jsonrpc"`
-	ID      int         `json:"id"`
+	ID      *int        `json:"id,omitempty"`
 	Method  string      `json:"method"`
 	Params  interface{} `json:"params,omitempty"`
 }
 
 type jsonRPCResponse struct {
-	JSONRPC string `json:"jsonrpc"`
-	ID      int    `json:"id"`
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
 	Result  struct {
 		Tools []struct {
 			Name        string                 `json:"name"`
@@ -972,62 +951,60 @@ type jsonRPCResponse struct {
 	} `json:"error,omitempty"`
 }
 
+const mcpClientProtocolVersion = "2025-06-18"
+
+func intPtr(i int) *int { return &i }
+
+// rpcCall POSTs req and returns the response whose id matches (JSON or SSE body).
+// Notifications (nil ID) return a nil response.
+func rpcCall(ctx context.Context, c *bridge.Client, req jsonRPCRequest) (*jsonRPCResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	var resp *jsonRPCResponse
+	err = c.Post(ctx, body, func(msg []byte) error {
+		var r jsonRPCResponse
+		if json.Unmarshal(msg, &r) == nil && req.ID != nil && string(r.ID) == strconv.Itoa(*req.ID) {
+			resp = &r
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if req.ID != nil && resp == nil {
+		return nil, fmt.Errorf("%s: no response", req.Method)
+	}
+	if resp != nil && resp.Error != nil {
+		return nil, fmt.Errorf("%s error: %s", req.Method, resp.Error.Message)
+	}
+	return resp, nil
+}
+
 func fetchToolsList(mcpURL string) ([]config.ToolConfig, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	initReq := jsonRPCRequest{
+	ctx := context.Background()
+	c := &bridge.Client{URL: mcpURL, Timeout: 10 * time.Second}
+	defer c.Delete(ctx)
+	_, err := rpcCall(ctx, c, jsonRPCRequest{
 		JSONRPC: "2.0",
-		ID:      1,
+		ID:      intPtr(1),
 		Method:  "initialize",
 		Params: map[string]interface{}{
-			"protocolVersion": "2024-11-05",
+			"protocolVersion": mcpClientProtocolVersion,
+			"capabilities":    map[string]interface{}{},
 			"clientInfo":      map[string]string{"name": "mcp-local", "version": "0.1.0"},
 		},
-	}
-	initBody, _ := json.Marshal(initReq)
-	resp, err := client.Post(mcpURL, "application/json", bytes.NewReader(initBody))
+	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("initialize: %w", err)
 	}
-	var initResp jsonRPCResponse
-	if err := json.NewDecoder(resp.Body).Decode(&initResp); err != nil {
-		resp.Body.Close()
-		return nil, fmt.Errorf("initialize response: %w", err)
-	}
-	resp.Body.Close()
-	if initResp.Error != nil {
-		return nil, fmt.Errorf("initialize error: %s", initResp.Error.Message)
-	}
-
-	initializedReq := jsonRPCRequest{
-		JSONRPC: "2.0",
-		Method:  "notifications/initialized",
-	}
-	initializedBody, _ := json.Marshal(initializedReq)
-	resp, err = client.Post(mcpURL, "application/json", bytes.NewReader(initializedBody))
-	if err != nil {
+	if _, err := rpcCall(ctx, c, jsonRPCRequest{JSONRPC: "2.0", Method: "notifications/initialized"}); err != nil {
 		return nil, fmt.Errorf("send initialized notification: %w", err)
 	}
-	_, _ = io.Copy(io.Discard, resp.Body)
-	resp.Body.Close()
-
-	toolsReq := jsonRPCRequest{
-		JSONRPC: "2.0",
-		ID:      2,
-		Method:  "tools/list",
-	}
-	toolsBody, _ := json.Marshal(toolsReq)
-	resp, err = client.Post(mcpURL, "application/json", bytes.NewReader(toolsBody))
+	rpcResp, err := rpcCall(ctx, c, jsonRPCRequest{JSONRPC: "2.0", ID: intPtr(2), Method: "tools/list"})
 	if err != nil {
 		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var rpcResp jsonRPCResponse
-	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
-		return nil, err
-	}
-	if rpcResp.Error != nil {
-		return nil, fmt.Errorf("MCP error: %s", rpcResp.Error.Message)
 	}
 	var tools []config.ToolConfig
 	for _, t := range rpcResp.Result.Tools {
@@ -1081,8 +1058,9 @@ func cmdImport() *cobra.Command {
 				if err != nil {
 					continue
 				}
-				var m map[string]interface{}
-				if err := json.Unmarshal(data, &m); err != nil {
+				m, err := jsonagent.ParseJSONC(data)
+				if err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "  ⚠️  %s: %v\n", path, err)
 					continue
 				}
 				block, _ := m[blockKey].(map[string]interface{})
@@ -1099,7 +1077,10 @@ func cmdImport() *cobra.Command {
 					}
 					svc := config.ServiceConfig{Name: name}
 					entryType, _ := entry["type"].(string)
-					if entryType == "remote" || entryType == "http" {
+					if url, ok := bridgeURL(entry); ok {
+						svc.MCPType = "http"
+						svc.MCPURL = url
+					} else if entryType == "remote" || entryType == "http" {
 						svc.MCPType = "http"
 						if url, ok := entry["url"].(string); ok {
 							svc.MCPURL = url
@@ -1154,6 +1135,17 @@ func cmdImport() *cobra.Command {
 	}
 	c.Flags().StringVar(&source, "from", "", "Source agent: opencode, cursor, or claude (default: all)")
 	return c
+}
+
+// bridgeURL recognizes a Claude Desktop entry written by mcp-local: {"command": ".../mcp-local", "args": ["bridge", url]}.
+func bridgeURL(entry map[string]interface{}) (string, bool) {
+	cmd, _ := entry["command"].(string)
+	args, _ := entry["args"].([]interface{})
+	if filepath.Base(cmd) != "mcp-local" || len(args) < 2 || args[0] != "bridge" {
+		return "", false
+	}
+	url, ok := args[1].(string)
+	return url, ok
 }
 
 func cmdServeFS() *cobra.Command {

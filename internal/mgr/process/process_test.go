@@ -10,6 +10,18 @@ import (
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
 )
 
+// TestMain points HOME at a temp dir so pid files never land in the real ~/.mcp-local.
+func TestMain(m *testing.M) {
+	home, err := os.MkdirTemp("", "process-home-*")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("HOME", home)
+	code := m.Run()
+	os.RemoveAll(home)
+	os.Exit(code)
+}
+
 func TestSaveLoadRemovePID(t *testing.T) {
 	name := "test-service"
 	pid := 12345

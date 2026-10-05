@@ -12,9 +12,7 @@ import (
 func setupTestCursor(t *testing.T) string {
 	t.Helper()
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpDir)
-	t.Cleanup(func() { os.Setenv("HOME", origHome) })
+	t.Setenv("HOME", tmpDir)
 
 	cfgDir := filepath.Join(tmpDir, ".cursor")
 	os.MkdirAll(cfgDir, 0755)
@@ -88,8 +86,11 @@ func TestDeregister(t *testing.T) {
 	setupTestCursor(t)
 
 	_ = RegisterRemote("to-remove", "http://localhost:9999/mcp")
-	if err := Deregister("to-remove"); err != nil {
-		t.Fatalf("Deregister: %v", err)
+	if found, err := Deregister("to-remove"); err != nil || !found {
+		t.Fatalf("Deregister = %v, %v", found, err)
+	}
+	if found, err := Deregister("to-remove"); err != nil || found {
+		t.Fatalf("second Deregister = %v, %v; want false", found, err)
 	}
 
 	data, _ := os.ReadFile(ConfigPath())

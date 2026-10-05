@@ -1,258 +1,367 @@
 package jsonagent
 
 import (
-	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
 )
 
-func TestReadJSON(t *testing.T) {
-	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "test.json")
-
-	data := map[string]interface{}{
-		"key": "value",
-		"nested": map[string]interface{}{
-			"inner": 123,
-		},
+func TestMain(m *testing.M) {
+	home, err := os.MkdirTemp("", "jsonagent-home-*")
+	if err != nil {
+		panic(err)
 	}
-	b, _ := json.Marshal(data)
-	if err := os.WriteFile(testFile, b, 0644); err != nil {
+	os.Setenv("HOME", home)
+	code := m.Run()
+	os.RemoveAll(home)
+	os.Exit(code)
+}
+
+func remoteConverter(e config.AgentEntry) map[string]interface{} {
+	if e.Type == "remote" {
+		return map[string]interface{}{"type": "http", "url": e.URL}
+	}
+	return map[string]interface{}{"type": "stdio", "command": e.Command[0]}
+}
+
+func writeFile(t *testing.T, path, content string, mode os.FileMode) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), mode); err != nil {
 		t.Fatal(err)
 	}
+}
 
-	got, err := ReadJSON(testFile)
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return string(b)
+}
 
-	if got["key"] != "value" {
-		t.Errorf("key = %v, want value", got["key"])
+func block(t *testing.T, path, key string) map[string]interface{} {
+	t.Helper()
+	m, err := ReadJSON(path)
+	if err != nil {
+		t.Fatalf("ReadJSON: %v", err)
 	}
-	nested := got["nested"].(map[string]interface{})
-	if nested["inner"] != float64(123) {
-		t.Errorf("nested.inner = %v, want 123", nested["inner"])
+	b, _ := m[key].(map[string]interface{})
+	return b
+}
+
+func TestReadJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.json")
+	writeFile(t, path, `{"key": "value", "nested": {"inner": 123}}`, 0o644)
+	got, err := ReadJSON(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["key"] != "value" || got["nested"].(map[string]interface{})["inner"] != float64(123) {
+		t.Errorf("got %v", got)
+	}
+}
+
+func TestReadJSON_JSONC(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.jsonc")
+	writeFile(t, path, "{\n  // line\n  /* block */ \"key\": \"value\",\n}\n", 0o644)
+	got, err := ReadJSON(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["key"] != "value" {
+		t.Errorf("key = %v", got["key"])
 	}
 }
 
 func TestReadJSON_NotExist(t *testing.T) {
-	_, err := ReadJSON("/nonexistent/path.json")
-	if err == nil {
-		t.Error("Expected error for nonexistent file")
+	if _, err := ReadJSON("/nonexistent/path.json"); err == nil {
+		t.Error("expected error for nonexistent file")
 	}
 }
 
-func TestWriteJSON(t *testing.T) {
-	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "output.json")
-
-	data := map[string]interface{}{
-		"key": "value",
-	}
-
-	if err := WriteJSON(testFile, data); err != nil {
-		t.Fatal(err)
-	}
-
-	// Read back and verify
-	got, err := ReadJSON(testFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if got["key"] != "value" {
-		t.Errorf("key = %v, want value", got["key"])
-	}
-}
-
-func TestWriteJSON_CreatesDirectory(t *testing.T) {
-	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "subdir", "output.json")
-
-	data := map[string]interface{}{"key": "value"}
-	if err := WriteJSON(testFile, data); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := ReadJSON(testFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got["key"] != "value" {
-		t.Errorf("key = %v, want value", got["key"])
-	}
-}
-
-func TestEnsureBlock(t *testing.T) {
-	a := New("/tmp/test", "mcp", ReadJSON, WriteJSON, func(e config.AgentEntry) map[string]interface{} { return nil })
-
-	// Test creating block when nil
-	m := map[string]interface{}{}
-	block := a.EnsureBlock(m)
-	if block == nil {
-		t.Error("EnsureBlock should return a map")
-	}
-	// Check that the block is stored in the parent map by checking pointer equality
-	if _, ok := m["mcp"]; !ok {
-		t.Error("EnsureBlock should set the block in the parent map")
-	}
-
-	// Test returning existing block
-	m2 := map[string]interface{}{"mcp": map[string]interface{}{"existing": "value"}}
-	block2 := a.EnsureBlock(m2)
-	if block2["existing"] != "value" {
-		t.Error("EnsureBlock should return existing block")
-	}
-}
-
-func TestRegisterServices(t *testing.T) {
-	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "config.json")
-
-	a := New(testFile, "mcpServers", ReadJSON, WriteJSON, func(e config.AgentEntry) map[string]interface{} {
-		if e.Type == "remote" {
-			return map[string]interface{}{"type": "http", "url": e.URL}
-		}
-		return map[string]interface{}{"type": "stdio", "command": e.Command[0]}
-	})
-
+func TestRegisterServices_NewFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sub", "config.json")
+	a := New(path, "mcpServers", remoteConverter)
 	services := []config.ServiceConfig{
 		{Name: "test-service", Command: "/bin/echo", Args: []string{"hello"}, MCPType: "stdio"},
 		{Name: "remote-service", MCPType: "http", MCPURL: "http://localhost:8080/mcp"},
 	}
-
 	if err := a.RegisterServices(services); err != nil {
 		t.Fatal(err)
 	}
-
-	// Verify written
-	got, err := ReadJSON(testFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	block := got["mcpServers"].(map[string]interface{})
-	if block["test-service"] == nil {
-		t.Error("test-service not registered")
-	}
-	if block["remote-service"] == nil {
-		t.Error("remote-service not registered")
+	want := `{
+  "mcpServers": {
+    "remote-service": {
+      "type": "http",
+      "url": "http://localhost:8080/mcp"
+    },
+    "test-service": {
+      "command": "/bin/echo",
+      "type": "stdio"
+    }
+  }
+}
+`
+	if got := readFile(t, path); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
 }
 
-func TestDeregister(t *testing.T) {
-	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "config.json")
+const jsoncFixture = `// OpenCode config — user comments must survive
+{
+	"$schema": "https://opencode.ai/config.json",
+	/* theme block
+	   spans lines */
+	"theme": "dark", // inline after value
+	"mcp": {
+		// foreign server added by hand
+		"foreign": { "type": "local", "command": ["foo"], "enabled": true, }, // keep me
+	},
+	"tail": [1, 2, 3,],
+}
+`
 
-	// Pre-populate with a service
-	initial := map[string]interface{}{
-		"mcpServers": map[string]interface{}{
-			"to-remove": map[string]interface{}{"type": "stdio", "command": "echo"},
-			"to-keep":   map[string]interface{}{"type": "stdio", "command": "cat"},
+func TestSetEntries_PreservesJSONC(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "opencode.jsonc")
+	writeFile(t, path, jsoncFixture, 0o644)
+	a := New(path, "mcp", nil)
+	if err := a.SetEntries(map[string]map[string]interface{}{"ours": {"type": "remote", "url": "http://x/mcp"}}); err != nil {
+		t.Fatal(err)
+	}
+	got := readFile(t, path)
+	want := `// OpenCode config — user comments must survive
+{
+	"$schema": "https://opencode.ai/config.json",
+	/* theme block
+	   spans lines */
+	"theme": "dark", // inline after value
+	"mcp": {
+		// foreign server added by hand
+		"foreign": { "type": "local", "command": ["foo"], "enabled": true, }, // keep me
+		"ours": {
+			"type": "remote",
+			"url": "http://x/mcp"
 		},
+	},
+	"tail": [1, 2, 3,],
+}
+`
+	if got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
-	b, _ := json.Marshal(initial)
-	if err := os.WriteFile(testFile, b, 0644); err != nil {
-		t.Fatal(err)
+	if b := block(t, path, "mcp"); b["foreign"] == nil || b["ours"] == nil {
+		t.Errorf("block = %v", b)
 	}
-
-	a := New(testFile, "mcpServers", ReadJSON, WriteJSON, nil)
-
-	// Deregister existing
-	removed, err := a.Deregister("to-remove")
-	if err != nil {
-		t.Fatal(err)
+	// Deregistering our entry restores the original bytes exactly.
+	found, err := a.Deregister("ours")
+	if err != nil || !found {
+		t.Fatalf("Deregister = %v, %v", found, err)
 	}
-	if !removed {
-		t.Error("Deregister should return true for existing service")
-	}
-
-	// Try to deregister non-existing
-	removed2, err := a.Deregister("nonexistent")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if removed2 {
-		t.Error("Deregister should return false for non-existing service")
-	}
-
-	// Verify final state
-	got, err := ReadJSON(testFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	block := got["mcpServers"].(map[string]interface{})
-	if block["to-remove"] != nil {
-		t.Error("to-remove should have been removed")
-	}
-	if block["to-keep"] == nil {
-		t.Error("to-keep should still exist")
+	if got := readFile(t, path); got != jsoncFixture {
+		t.Errorf("after deregister got:\n%s\nwant original:\n%s", got, jsoncFixture)
 	}
 }
 
-func TestRegisterRemote(t *testing.T) {
-	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "config.json")
-
-	a := New(testFile, "mcpServers", ReadJSON, WriteJSON, nil)
-
-	if err := a.RegisterRemote("remote-svc", "http://example.com/mcp", nil); err != nil {
+func TestSetEntries_ReplaceKeepsSurroundings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp.json")
+	orig := "{\n  // top\n  \"mcpServers\": {\n    \"a\": {\"url\": \"http://old\"}, // trailing\n    \"b\": {\"url\": \"http://b\"}\n  }\n}\n"
+	writeFile(t, path, orig, 0o644)
+	a := New(path, "mcpServers", nil)
+	if err := a.SetEntries(map[string]map[string]interface{}{"a": {"url": "http://new"}}); err != nil {
 		t.Fatal(err)
 	}
+	got := readFile(t, path)
+	if !strings.Contains(got, "// top") || !strings.Contains(got, "// trailing") || !strings.Contains(got, `"b": {"url": "http://b"}`) {
+		t.Errorf("surroundings lost:\n%s", got)
+	}
+	if block(t, path, "mcpServers")["a"].(map[string]interface{})["url"] != "http://new" {
+		t.Errorf("a not replaced:\n%s", got)
+	}
+}
 
-	got, err := ReadJSON(testFile)
+func TestSetEntries_IdempotentNoWrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp.json")
+	a := New(path, "mcpServers", nil)
+	entry := map[string]map[string]interface{}{"svc": {"url": "http://x", "args": []string{"a"}}}
+	if err := a.SetEntries(entry); err != nil {
+		t.Fatal(err)
+	}
+	fi1, _ := os.Stat(path)
+	time.Sleep(10 * time.Millisecond)
+	if err := a.SetEntries(entry); err != nil {
+		t.Fatal(err)
+	}
+	fi2, _ := os.Stat(path)
+	if !fi1.ModTime().Equal(fi2.ModTime()) {
+		t.Error("unchanged entry should not rewrite the file")
+	}
+}
+
+func TestDeregister_ExactNameAndForeignPreserved(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	writeFile(t, path, `{"mcpServers": {"to-remove": {"command": "echo"}, "to-remove-2": {"command": "x"}, "to-keep": {"command": "cat"}}}`, 0o644)
+	a := New(path, "mcpServers", nil)
+	if found, err := a.Deregister("to-remove"); err != nil || !found {
+		t.Fatalf("Deregister = %v, %v", found, err)
+	}
+	if found, err := a.Deregister("to-"); err != nil || found {
+		t.Fatalf("prefix must not match: %v, %v", found, err)
+	}
+	b := block(t, path, "mcpServers")
+	if b["to-remove"] != nil || b["to-remove-2"] == nil || b["to-keep"] == nil {
+		t.Errorf("block = %v", b)
+	}
+}
+
+func TestDeregister_MissingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nope.json")
+	found, err := New(path, "mcpServers", nil).Deregister("x")
+	if err != nil || found {
+		t.Fatalf("Deregister = %v, %v", found, err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("deregister must not create the file")
+	}
+}
+
+func TestDeregister_BlockOwnership(t *testing.T) {
+	dir := t.TempDir()
+	// Block created by us: removed entirely when emptied.
+	created := filepath.Join(dir, "created.json")
+	writeFile(t, created, "{\n  \"other\": true\n}\n", 0o644)
+	a := New(created, "mcpServers", nil)
+	if err := a.RegisterRemote("svc", "http://x", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Deregister("svc"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, created); got != "{\n  \"other\": true\n}\n" {
+		t.Errorf("created block not removed:\n%s", got)
+	}
+	// Pre-existing block: left as {}.
+	pre := filepath.Join(dir, "pre.json")
+	writeFile(t, pre, "{\n  \"mcpServers\": {\n    \"svc\": {\"url\": \"http://x\"}\n  }\n}\n", 0o644)
+	if _, err := New(pre, "mcpServers", nil).Deregister("svc"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, pre); got != "{\n  \"mcpServers\": {}\n}\n" {
+		t.Errorf("pre-existing block should remain {}:\n%q", got)
+	}
+}
+
+func TestAtomicWritePreservesModeAndBacksUp(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp.json")
+	orig := `{"mcpServers": {}}`
+	writeFile(t, path, orig, 0o600)
+	if err := New(path, "mcpServers", nil).RegisterRemote("svc", "http://x", nil); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %v, want 0600", fi.Mode().Perm())
+	}
+	leftovers, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".mcp.json.tmp-*"))
+	if len(leftovers) != 0 {
+		t.Errorf("temp files left behind: %v", leftovers)
+	}
+	backups, _ := filepath.Glob(filepath.Join(BackupDir(), "*", backupName(path)))
+	if len(backups) != 1 {
+		t.Fatalf("backups = %v", backups)
+	}
+	if got := readFile(t, backups[0]); got != orig {
+		t.Errorf("backup = %q, want original", got)
+	}
+}
 
-	block := got["mcpServers"].(map[string]interface{})
-	entry := block["remote-svc"].(map[string]interface{})
-	if entry["url"] != "http://example.com/mcp" {
-		t.Errorf("url = %v, want http://example.com/mcp", entry["url"])
+func TestBackupRetention(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp.json")
+	writeFile(t, path, `{}`, 0o644)
+	base := time.Date(2026, 1, 2, 3, 4, 0, 0, time.Local)
+	defer func() { now = time.Now }()
+	a := New(path, "mcpServers", nil)
+	for i := 0; i < MaxBackups+3; i++ {
+		now = func() time.Time { return base.Add(time.Duration(i) * time.Second) }
+		if err := a.RegisterRemote("svc", fmt.Sprintf("http://x/%d", i), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	backups, _ := filepath.Glob(filepath.Join(BackupDir(), "*", backupName(path)))
+	if len(backups) != MaxBackups {
+		t.Fatalf("kept %d backups, want %d", len(backups), MaxBackups)
+	}
+	if !strings.Contains(backups[0], base.Add(3*time.Second).Format("20060102-150405")) {
+		t.Errorf("oldest kept = %s", backups[0])
+	}
+}
+
+func TestWriteThroughSymlink(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real.json")
+	link := filepath.Join(dir, "link.json")
+	writeFile(t, real, `{}`, 0o644)
+	if err := os.Symlink(real, link); err != nil {
+		t.Skip(err)
+	}
+	if err := New(link, "mcpServers", nil).RegisterRemote("svc", "http://x", nil); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Lstat(link); fi.Mode()&os.ModeSymlink == 0 {
+		t.Error("symlink replaced by regular file")
+	}
+	if block(t, real, "mcpServers")["svc"] == nil {
+		t.Error("target not updated")
+	}
+}
+
+func TestRegisterRemote_SameURLNoop(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	writeFile(t, path, `{"mcpServers": {"svc": {"url": "http://x", "headers": {"A": "b"}}}}`, 0o644)
+	if err := New(path, "mcpServers", nil).RegisterRemote("svc", "http://x", nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(readFile(t, path), "headers") {
+		t.Error("same-url register should not rewrite user extras")
 	}
 }
 
 func TestRegisterLocal(t *testing.T) {
-	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "config.json")
-
-	a := New(testFile, "mcpServers", ReadJSON, WriteJSON, nil)
-
+	path := filepath.Join(t.TempDir(), "config.json")
+	a := New(path, "mcpServers", nil)
 	if err := a.RegisterLocal("local-svc", []string{"/bin/echo", "hello"}, map[string]string{"KEY": "VAL"}, "env", "args"); err != nil {
 		t.Fatal(err)
 	}
-
-	got, err := ReadJSON(testFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	block := got["mcpServers"].(map[string]interface{})
-	entry := block["local-svc"].(map[string]interface{})
+	entry := block(t, path, "mcpServers")["local-svc"].(map[string]interface{})
 	if entry["command"] != "/bin/echo" {
-		t.Errorf("command = %v, want /bin/echo", entry["command"])
+		t.Errorf("command = %v", entry["command"])
 	}
-	args := entry["args"].([]interface{})
-	if len(args) != 1 || args[0] != "hello" {
-		t.Errorf("args = %v, want [hello]", args)
+	if args := entry["args"].([]interface{}); len(args) != 1 || args[0] != "hello" {
+		t.Errorf("args = %v", args)
 	}
-	env := entry["env"].(map[string]interface{})
-	if env["KEY"] != "VAL" {
-		t.Errorf("env = %v, want KEY=VAL", env)
+	if env := entry["env"].(map[string]interface{}); env["KEY"] != "VAL" {
+		t.Errorf("env = %v", env)
+	}
+	if err := a.RegisterLocal("x", nil, nil, "env", "args"); err == nil {
+		t.Error("empty command should fail")
 	}
 }
 
-func TestRegisterLocal_EmptyCommand(t *testing.T) {
-	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "config.json")
-
-	a := New(testFile, "mcpServers", ReadJSON, WriteJSON, nil)
-
-	err := a.RegisterLocal("local-svc", []string{}, nil, "env", "args")
-	if err == nil {
-		t.Error("RegisterLocal should fail with empty command")
+func TestParseErrorLeavesFileUntouched(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bad.json")
+	writeFile(t, path, `{"mcpServers": {`, 0o644)
+	if err := New(path, "mcpServers", nil).RegisterRemote("svc", "http://x", nil); err == nil {
+		t.Fatal("expected parse error")
+	}
+	if got := readFile(t, path); got != `{"mcpServers": {` {
+		t.Errorf("file modified: %q", got)
 	}
 }

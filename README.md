@@ -33,7 +33,11 @@ When building an advanced AI agent setup, you often end up with a fragmented eco
 On `start` / `restart` / `register`, services are registered with enabled agents:
 - **OpenCode**: `~/.config/opencode/opencode.jsonc` — HTTP as `remote`, stdio as `local`.
 - **Cursor**: `~/.cursor/mcp.json` — HTTP as `{ "url": "..." }`, stdio as `{ "command": "...", "args": [...], "env": {...} }`.
-- **Claude Desktop**: `claude_desktop_config.json` — same shape as Cursor.
+- **Claude Desktop**: `claude_desktop_config.json` — stdio as `{ "type": "stdio", "command": "...", "args": [...], "env": {...} }`. Claude Desktop only launches stdio servers, so HTTP services are written as a bridge entry: `{ "command": "/abs/path/mcp-local", "args": ["bridge", "<mcp_url>"] }`.
+
+Only mcp-local's own entries are touched: files are edited as JSONC (comments, trailing commas, key order, and formatting survive), written atomically, and the original is backed up to `~/.mcp-local/backups/<YYYYMMDD-HHMMSS>/` (last 5 per file). A failure on one agent does not stop the others; all errors are reported together.
+
+**ast-context-cache:** services whose `command` is an `ast-mcp` binary are registered by delegating to `ast-mcp install|uninstall --target <opencode|cursor|claude_desktop> --component mcp --yes --json --mcp-url <mcp_url>` (ast-mcp 4.0.0+). Older ast-mcp versions fall back to mcp-local's writers with a warning. Set `installer: native` on the service to always use mcp-local's writers.
 
 ```yaml
 agents:
@@ -41,6 +45,10 @@ agents:
   cursor: true
   claude: true
 ```
+
+### stdio ↔ HTTP Bridge
+- `mcp-local bridge <url>` — relays newline-delimited JSON-RPC on stdin/stdout to a Streamable HTTP MCP server (spec 2025-06-18): session id and protocol version headers, JSON and SSE responses, the server's GET notification stream, JSON-RPC errors for failed HTTP requests, session DELETE on stdin EOF. Logs go to stderr.
+- Flags: `--header key=value` (repeatable), `--timeout` per request (default `60s`).
 
 ### Tool & Tier Management (ast-context-cache)
 - `mcp-local tools sync <service>` — fetch tool list from a running MCP server via `tools/list`.
@@ -70,6 +78,7 @@ All settings in `~/.mcp-local/config.yaml`. Sync across machines via Dropbox, iC
 ## Supported Agents
 - **OpenCode**: Full integration with `opencode.jsonc` / `opencode.json`.
 - **Cursor**: Full integration with `~/.cursor/mcp.json`.
+- **Claude Desktop**: `claude_desktop_config.json`, with HTTP services via `mcp-local bridge`.
 - **Any MCP-compliant client**: Manages standard HTTP or stdio MCP servers.
 
 ## Supported MCP Servers
@@ -159,6 +168,7 @@ mcp-local log my-server        # Tail one service's log
 mcp-local open my-server       # Open dashboard in browser
 
 # Agent Registration
+mcp-local bridge http://localhost:7821/mcp  # stdio relay (what Claude Desktop runs)
 mcp-local register             # Register all services
 mcp-local register my-server   # Register one service
 mcp-local register --dry-run   # Preview what would be registered
@@ -207,6 +217,7 @@ mcp-local json tools ast-context-cache   # Preview tools.json overrides
 | `tools_config_path` | Path to tools overrides JSON (default `~/.astcache/tools.json`) |
 | `tools` | Per-tool overrides (name, enabled, tier, description) → `tools.json` on start |
 | `path` | Filesystem root path (required when `type: filesystem`) |
+| `installer` | Who writes agent entries: `ast-mcp` (auto-set when `command` is an `ast-mcp` binary; delegates to `ast-mcp install`) or `native` (mcp-local's writers) |
 
 ## Documentation
 

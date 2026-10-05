@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 	"syscall"
 	"time"
 
@@ -42,7 +43,7 @@ func stopByPID(name string, pid int, svc config.ServiceConfig, deregister bool, 
 			_ = process.RemovePID(name)
 			fmt.Printf("  ✅ %s stopped (pid %d)\n", name, pid)
 			if deregister {
-				_ = agents.DeregisterAll(name, targets)
+				warnDeregister(name, agents.DeregisterAll(svc, targets))
 			}
 			return
 		}
@@ -51,8 +52,18 @@ func stopByPID(name string, pid int, svc config.ServiceConfig, deregister bool, 
 	_ = process.RemovePID(name)
 	fmt.Printf("  ✅ %s killed (pid %d)\n", name, pid)
 	if deregister {
-		_ = agents.DeregisterAll(name, targets)
+		warnDeregister(name, agents.DeregisterAll(svc, targets))
 	}
+}
+
+func warnDeregister(name string, err error) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  ⚠️  %s: deregister failed:\n%s\n", name, indent(err.Error()))
+	}
+}
+
+func indent(s string) string {
+	return "    " + strings.ReplaceAll(s, "\n", "\n    ")
 }
 
 func stopServiceNamed(cfg *config.ManagerConfig, name string, deregister bool) error {
@@ -131,7 +142,7 @@ func registerStarted(cfg *config.ManagerConfig, started []config.ServiceConfig) 
 	targets := agents.TargetsFromConfig(*cfg)
 	fmt.Println("\n🔄 Registering services with agents...")
 	if err := agents.RegisterAll(started, targets); err != nil {
-		fmt.Printf("  ⚠️ Registration failed: %v\n", err)
+		fmt.Printf("  ⚠️  Registration failed:\n%s\n", indent(err.Error()))
 	} else {
 		if targets.OpenCode {
 			fmt.Println("  ✅ OpenCode registration complete")

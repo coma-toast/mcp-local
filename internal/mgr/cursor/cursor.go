@@ -14,7 +14,7 @@ func ConfigPath() string {
 }
 
 func newAgent() jsonagent.Agent {
-	return jsonagent.New(ConfigPath(), "mcpServers", jsonagent.ReadJSON, jsonagent.WriteJSON, entryToCursor)
+	return jsonagent.New(ConfigPath(), "mcpServers", entryToCursor)
 }
 
 func entryToCursor(entry config.AgentEntry) map[string]interface{} {
@@ -41,9 +41,9 @@ func RegisterLocal(name string, command []string, env map[string]string) error {
 	return newAgent().RegisterLocal(name, command, env, "env", "args")
 }
 
-func Deregister(name string) error {
-	_, err := newAgent().Deregister(name)
-	return err
+// Deregister removes the named entry; found is false when nothing was there.
+func Deregister(name string) (bool, error) {
+	return newAgent().Deregister(name)
 }
 
 func RegisterServices(services []config.ServiceConfig) error {

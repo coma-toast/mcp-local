@@ -1,9 +1,6 @@
 package config
 
-import (
-	"fmt"
-	"strings"
-)
+import "fmt"
 
 type AgentEntry struct {
 	Type        string
@@ -15,7 +12,7 @@ type AgentEntry struct {
 
 func ServiceToEntry(s ServiceConfig) (AgentEntry, error) {
 	if s.IsHTTP() {
-		url := strings.TrimSpace(s.MCPURL)
+		url := s.MCPEndpoint()
 		if url == "" {
 			url = fmt.Sprintf("http://localhost:%d/mcp", s.Port)
 		}

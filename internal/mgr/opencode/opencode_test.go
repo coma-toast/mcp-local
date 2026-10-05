@@ -4,17 +4,17 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
+	"github.com/coma-toast/mcp-local/internal/mgr/jsonagent"
 )
 
 func setupTestConfig(t *testing.T) string {
 	t.Helper()
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpDir)
-	t.Cleanup(func() { os.Setenv("HOME", origHome) })
+	t.Setenv("HOME", tmpDir)
 
 	cfgDir := filepath.Join(tmpDir, ".config", "opencode")
 	os.MkdirAll(cfgDir, 0755)
@@ -124,4 +124,57 @@ func TestIdempotentRegister(t *testing.T) {
 	if string(data1) != string(data2) {
 		t.Error("idempotent register should produce same file")
 	}
+}
+
+func TestJSONCCommentsPreserved(t *testing.T) {
+	path := setupTestConfig(t)
+	orig := `{
+  // inline comment at top
+  "$schema": "https://opencode.ai/config.json", // trailing note
+  /* block
+     comment */
+  "mcp": {
+    "foreign": {"type": "local", "command": ["x"], "enabled": true}, // hand-added
+  },
+}
+`
+	if err := os.WriteFile(path, []byte(orig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := RegisterRemote("ours", "http://localhost:1/mcp", 0); err != nil {
+		t.Fatalf("RegisterRemote: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	for _, want := range []string{"// inline comment at top", "// trailing note", "/* block\n     comment */", "// hand-added", `"foreign": {"type": "local", "command": ["x"], "enabled": true},`} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if !isRegistered(t, "ours") || !isRegistered(t, "foreign") {
+		t.Errorf("entries missing:\n%s", got)
+	}
+	if ok, err := Deregister("ours"); err != nil || !ok {
+		t.Fatalf("Deregister = %v, %v", ok, err)
+	}
+	if after, _ := os.ReadFile(path); string(after) != orig {
+		t.Errorf("deregister should restore original bytes:\n%s", after)
+	}
+}
+
+func TestDeregisterMissingFile(t *testing.T) {
+	setupTestConfig(t)
+	if ok, err := Deregister("x"); err != nil || ok {
+		t.Fatalf("Deregister = %v, %v", ok, err)
+	}
+}
+
+func isRegistered(t *testing.T, name string) bool {
+	t.Helper()
+	m, err := jsonagent.ReadJSON(ConfigPath())
+	if err != nil {
+		t.Fatalf("ReadJSON: %v", err)
+	}
+	block, _ := m["mcp"].(map[string]interface{})
+	_, ok := block[name]
+	return ok
 }
