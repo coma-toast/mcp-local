@@ -127,6 +127,7 @@ func addCommands() {
 	rootCmd.AddCommand(cmdTools())
 	rootCmd.AddCommand(cmdJSON())
 	rootCmd.AddCommand(cmdServeFS())
+	rootCmd.AddCommand(cmdBridge())
 }
 
 func cmdList() *cobra.Command {
