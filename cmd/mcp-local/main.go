@@ -10,9 +10,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// version is set at release build time (-ldflags "-X main.version=...").
+var version = "dev"
+
 var rootCmd = &cobra.Command{
-	Use:   "mcp-local",
-	Short: "Local MCP Service Manager",
+	Use:     "mcp-local",
+	Version: version,
+	Short:   "Local MCP Service Manager",
 	Long: `mcp-local is a unified control plane for managing multiple local MCP servers,
 lifecycle, OpenCode registration, and tool configuration.`,
 	Example: `  mcp-local add github --type stdio --command npx --args "-y" --args "@modelcontextprotocol/server-github" --env GITHUB_TOKEN=ghp_xxxx

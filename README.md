@@ -90,6 +90,17 @@ While it can manage *any* binary, it is optimized for:
 ## Getting Started
 
 ### Installation
+
+Every merge to `main` publishes a [GitHub release](https://github.com/coma-toast/mcp-local/releases) with binaries for macOS and Linux (amd64 and arm64) and a `checksums.txt`:
+
+```bash
+tar -xzf mcp-local_<version>_darwin_arm64.tar.gz
+install -m 0755 mcp-local ~/.local/bin/   # or any directory on your PATH
+mcp-local --version
+```
+
+Or build from source:
+
 ```bash
 git clone https://github.com/coma-toast/mcp-local.git
 cd mcp-local
