@@ -162,3 +162,36 @@ func TestLoadSaveConfig(t *testing.T) {
 		t.Error("agents config not preserved")
 	}
 }
+
+func TestEffectiveInstaller(t *testing.T) {
+	tests := []struct {
+		name string
+		svc  ServiceConfig
+		want string
+	}{
+		{"ast-mcp basename", ServiceConfig{Command: "/home/u/git/ast-context-cache/ast-mcp"}, InstallerASTMCP},
+		{"other command", ServiceConfig{Command: "/usr/bin/other"}, ""},
+		{"explicit native", ServiceConfig{Command: "/x/ast-mcp", Installer: InstallerNative}, ""},
+		{"explicit installer", ServiceConfig{Command: "/usr/bin/other", Installer: "ast-mcp"}, InstallerASTMCP},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.svc.EffectiveInstaller(); got != tt.want {
+				t.Errorf("EffectiveInstaller() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExpandServiceAutoSetsInstaller(t *testing.T) {
+	s := ServiceConfig{Command: "~/bin/ast-mcp"}
+	ExpandService(&s)
+	if s.Installer != InstallerASTMCP {
+		t.Errorf("Installer = %q, want ast-mcp", s.Installer)
+	}
+	n := ServiceConfig{Command: "~/bin/ast-mcp", Installer: InstallerNative}
+	ExpandService(&n)
+	if n.Installer != InstallerNative {
+		t.Errorf("explicit native overwritten: %q", n.Installer)
+	}
+}
