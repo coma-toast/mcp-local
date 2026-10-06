@@ -23,10 +23,15 @@ func StateDir() string {
 
 func BackupDir() string { return filepath.Join(StateDir(), "backups") }
 
-// resolvePath follows a symlinked config so the link survives the atomic rename.
+// resolvePath follows a symlinked config so the link survives the atomic rename. A file that
+// doesn't exist yet still gets its directory resolved, so the path is the same before and after
+// the first write (block ownership is keyed by it; e.g. macOS /var -> /private/var).
 func resolvePath(path string) string {
 	if real, err := filepath.EvalSymlinks(path); err == nil {
 		return real
+	}
+	if dir, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+		return filepath.Join(dir, filepath.Base(path))
 	}
 	return path
 }
