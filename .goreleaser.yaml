@@ -1,0 +1,35 @@
+# GoReleaser config for mcp-local (pure Go, so one runner cross-compiles every target).
+# Local check:  go run github.com/goreleaser/goreleaser/v2@latest release --snapshot --clean --skip=publish
+version: 2
+
+project_name: mcp-local
+
+builds:
+  - main: ./cmd/mcp-local
+    binary: mcp-local
+    env: [CGO_ENABLED=0, GOWORK=off]
+    flags: [-trimpath]
+    ldflags: ["-s -w -X main.version={{ .Version }}"]
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - AGENTS.md
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  use: github-native
+
+release:
+  github:
+    owner: coma-toast
+    name: mcp-local
