@@ -256,6 +256,28 @@ func TestDeregister_BlockOwnership(t *testing.T) {
 	}
 }
 
+// A config that doesn't exist yet, in a directory reached through a symlink (as macOS temp and
+// home paths can be), must be keyed the same before and after the first write, or the created
+// block is never recognized as ours.
+func TestDeregister_BlockOwnershipThroughSymlinkedDir(t *testing.T) {
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(link, "mcp.json")
+	a := New(path, "mcpServers", nil)
+	if err := a.RegisterRemote("svc", "http://x", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Deregister("svc"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, path); strings.Contains(got, "mcpServers") {
+		t.Errorf("block created by mcp-local should be removed once empty:\n%s", got)
+	}
+}
+
 func TestAtomicWritePreservesModeAndBacksUp(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mcp.json")
 	orig := `{"mcpServers": {}}`

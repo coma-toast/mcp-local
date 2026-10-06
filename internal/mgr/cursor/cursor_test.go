@@ -98,8 +98,8 @@ func TestDeregister(t *testing.T) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	block := m["mcpServers"].(map[string]interface{})
-	if _, ok := block["to-remove"]; ok {
-		t.Error("to-remove should be deregistered")
+	// mcp-local created the mcpServers block for this entry, so removing the last entry removes it.
+	if block, ok := m["mcpServers"]; ok {
+		t.Errorf("mcpServers block should be removed once empty, got %v", block)
 	}
 }
