@@ -14,7 +14,7 @@ func DefaultBuiltinTier(name string) string {
 	case "execute_code":
 		return "complete"
 	case "index_files", "cache_summary", "analyze_dead_code", "analyze_complexity",
-		"export_bundle", "import_bundle", "fetch_doc", "add_doc_source", "remove_doc_source",
+		"fetch_doc", "add_doc_source", "remove_doc_source",
 		"update_doc_source", "store_context", "flush_context", "store_memory",
 		"forget_memory", "report_kv_repair_event":
 		return "extended"
