@@ -243,10 +243,16 @@ mcp-local json tools ast-context-cache   # Preview tools.json overrides
 ```bash
 make        # build
 make test   # run tests
-make check  # test + vet + fmt
+make check  # test + vet; fails on unformatted code without rewriting
+make fmt    # fix formatting with gofmt -w .
 ```
 
-CI runs `go test ./...`, `go vet`, and `go build` on push/PR.
+Install the binary with a custom `INSTALL_DIR`:
+
+```bash
+make install      # installs to /usr/local/bin (default)
+make install INSTALL_DIR=$(mktemp -d)  # installs to a temp directory
+```
 
 ## License
 
