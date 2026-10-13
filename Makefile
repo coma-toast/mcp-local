@@ -2,6 +2,7 @@ BINARY := mcp-local
 BINDIR := bin
 BIN := $(BINDIR)/$(BINARY)
 export GOWORK := off
+INSTALL_DIR ?= /usr/local/bin
 
 .PHONY: all build install clean test check fmt
 
@@ -24,5 +25,3 @@ fmt:
 
 clean:
 	rm -f $(BIN)
-
-INSTALL_DIR ?= /usr/local/bin

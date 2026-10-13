@@ -243,7 +243,7 @@ mcp-local json tools ast-context-cache   # Preview tools.json overrides
 ```bash
 make        # build
 make test   # run tests
-make check  # test + vet; fails on unformatted code without rewriting
+make check  # test + vet + fmt (fails on unformatted code without rewriting)
 make fmt    # fix formatting with gofmt -w .
 ```
 
