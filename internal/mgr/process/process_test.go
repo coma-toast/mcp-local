@@ -203,8 +203,17 @@ func TestTerminate_KillsWrapperChildren(t *testing.T) {
 
 func TestTerminate_EscalatesToSIGKILL(t *testing.T) {
 	shortStop(t)
-	pid := spawn(t, config.ServiceConfig{Name: "stubborn", Command: "/bin/sh", Args: []string{"-c", "trap '' TERM; sleep 30"}})
-	time.Sleep(100 * time.Millisecond)
+	ready := filepath.Join(t.TempDir(), "ready")
+	pid := spawn(t, config.ServiceConfig{Name: "stubborn", Command: "/bin/sh", Args: []string{"-c", "trap '' TERM; touch " + ready + "; sleep 30"}})
+	// SIGTERM must not arrive before the trap is installed, or the shell just exits.
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("stubborn process never installed its TERM trap")
+		}
+	}
 	killed, err := Terminate(SignalTarget(pid), nil)
 	if err != nil || !killed {
 		t.Fatalf("Terminate = %v, %v; want killed", killed, err)

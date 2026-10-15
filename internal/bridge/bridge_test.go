@@ -115,7 +115,7 @@ func (l *lineBuffer) Lines() []string {
 
 func (l *lineBuffer) waitFor(t *testing.T, substr string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(20 * time.Second) // generous: only a failing test waits this long
 	for time.Now().Before(deadline) {
 		for _, line := range l.Lines() {
 			if strings.Contains(line, substr) {
