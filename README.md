@@ -49,7 +49,8 @@ agents:
 
 ### stdio ↔ HTTP Bridge
 - `mcp-local bridge <url>` — relays newline-delimited JSON-RPC on stdin/stdout to a Streamable HTTP MCP server (spec 2025-06-18): session id and protocol version headers, JSON and SSE responses, the server's GET notification stream, JSON-RPC errors for failed HTTP requests, session DELETE on stdin EOF. Logs go to stderr.
-- Flags: `--header key=value` (repeatable), `--timeout` per request (default `60s`).
+- When the server forgets the session (HTTP 404, e.g. after `mcp-local restart`), the bridge replays the client's `initialize` and retries, so Claude Desktop keeps working. The GET stream reconnects with backoff and `Last-Event-ID`. On stdin EOF, in-flight calls get 2s, then are cancelled.
+- Flags: `--header key=value` (repeatable), `--timeout` (default `60s`): max wait for response headers, and max silence on a call's response stream. A long tool call that keeps streaming is not cut off. On timeout the server gets `notifications/cancelled`.
 
 ### Tool & Tier Management (ast-context-cache)
 - `mcp-local tools sync <service>` — fetch tool list from a running MCP server via `tools/list`.

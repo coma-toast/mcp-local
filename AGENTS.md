@@ -106,7 +106,7 @@ mcp-local bridge http://localhost:7821/mcp                         # stdin/stdou
 mcp-local bridge https://host/mcp --header "Authorization=Bearer …" --timeout 120s
 ```
 
-Newline-delimited JSON-RPC on stdin is POSTed to the URL (`Accept: application/json, text/event-stream`); JSON and SSE responses come back one message per stdout line. It keeps `Mcp-Session-Id` / `MCP-Protocol-Version`, forwards the server's GET SSE stream when offered, turns HTTP failures on requests into JSON-RPC errors (`code -32000`), exits 0 on stdin EOF (sending DELETE for the session), and logs only to stderr.
+Newline-delimited JSON-RPC on stdin is POSTed to the URL (`Accept: application/json, text/event-stream`); JSON and SSE responses come back one message per stdout line. It keeps `Mcp-Session-Id` / `MCP-Protocol-Version`, forwards the server's GET SSE stream when offered, turns HTTP failures on requests into JSON-RPC errors (`code -32000`), exits 0 on stdin EOF (sending DELETE for the session), and logs only to stderr. On a 404 for its session it replays the cached `initialize` / `notifications/initialized` (the replayed response is not forwarded) and retries once. `--timeout` is a header and idle timeout, not a cap on the whole call. Batches get `-32600` per request, and invalid JSON gets `-32700`.
 
 ### ast-context-cache tool tiers
 
