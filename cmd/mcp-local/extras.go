@@ -499,6 +499,10 @@ func cmdEdit() *cobra.Command {
 				return err
 			}
 			if err := tui.RunServiceEditor(&svc); err != nil {
+				if errors.Is(err, tui.ErrCancelled) {
+					fmt.Println("No changes saved.")
+					return nil
+				}
 				return err
 			}
 			for i := range cfg.Services {
@@ -833,6 +837,10 @@ func cmdTools() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			cfg := mustConfig()
 			if err := tui.RunToolManager(cfg); err != nil {
+				if errors.Is(err, tui.ErrCancelled) {
+					fmt.Println("No changes saved.")
+					return
+				}
 				fmt.Printf("Error: %v\n", err)
 				os.Exit(1)
 			}

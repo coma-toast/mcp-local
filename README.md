@@ -56,7 +56,7 @@ With no `agents:` key every host is enabled; with the key present, hosts set to 
 
 ### Tool & Tier Management (ast-context-cache)
 - `mcp-local tools sync <service>` — fetch tool list from a running MCP server via `tools/list` (the server's descriptions are not stored as overrides).
-- `mcp-local tools` — TUI to enable/disable tools, change tiers, edit descriptions.
+- `mcp-local tools` — TUI to enable/disable tools, change tiers, edit descriptions. Press `s` to save; `q`, Esc or Ctrl+C quit without saving.
 - `mcp-local tools apply <service>` — merge overrides into `~/.astcache/tools.json` (or `tools_config_path`); entries for tools the config doesn't override (e.g. set in the ast dashboard) are kept, and the file is backed up and written atomically.
 - `mcp-local json tools <service>` — print the tools.json overrides that would be written.
 - On start: `AST_MCP_TIER`, optional `AST_MCP_CODE_MODE`, and `AST_MCP_TOOLS_CONFIG` when tools are configured.
@@ -64,7 +64,7 @@ With no `agents:` key every host is enabled; with the key present, hosts set to 
 
 ### Configuration Management
 - `mcp-local add <name>` — add or update a service (interactive prompts for new services).
-- `mcp-local edit <service>` — TUI editor for service configuration.
+- `mcp-local edit <service>` — TUI editor for service configuration (↑/↓/Tab move between fields, Enter saves, Esc cancels).
 - `mcp-local remove <service>` — deregister from agents, then remove from config (kept in config if any agent fails).
 - `mcp-local config` — open `~/.mcp-local/config.yaml` in `$EDITOR`.
 - `mcp-local validate` — validate configuration for common issues (missing binaries, deps, ports).
