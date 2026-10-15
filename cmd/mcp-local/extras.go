@@ -27,6 +27,7 @@ import (
 	"github.com/coma-toast/mcp-local/internal/mgr/jsonagent"
 	"github.com/coma-toast/mcp-local/internal/mgr/logs"
 	"github.com/coma-toast/mcp-local/internal/mgr/opencode"
+	"github.com/coma-toast/mcp-local/internal/mgr/process"
 	"github.com/coma-toast/mcp-local/internal/portutil"
 	"github.com/coma-toast/mcp-local/internal/statusui"
 	"github.com/coma-toast/mcp-local/internal/tui"
@@ -79,35 +80,7 @@ func addCommands() {
 				names = []string{args[0]}
 			}
 			client := &http.Client{Timeout: 3 * time.Second}
-			for _, name := range names {
-				svc, _ := cfg.ServiceNamed(name)
-				if svc.HealthURL == "" {
-					fmt.Printf("%-24s  no health_url configured\n", name)
-					continue
-				}
-				resp, err := client.Get(svc.HealthURL)
-				if err != nil {
-					fmt.Printf("%-24s  ERROR: %v\n", name, err)
-					continue
-				}
-				body, _ := io.ReadAll(resp.Body)
-				resp.Body.Close()
-				var pretty string
-				var obj interface{}
-				if json.Unmarshal(body, &obj) == nil {
-					b, _ := json.MarshalIndent(obj, "                          ", "  ")
-					pretty = string(b)
-				} else {
-					pretty = strings.TrimSpace(string(body))
-				}
-				status := fmt.Sprintf("HTTP %d", resp.StatusCode)
-				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-					fmt.Printf("%-24s  ✓ %s  %s\n", name, status, pretty)
-				} else {
-					fmt.Fprintf(cmd.ErrOrStderr(), "%-24s  ✗ %s  %s\n", name, status, pretty)
-				}
-			}
-			return nil
+			return failures(cmd, runHealth(cfg, names, client, cmd.OutOrStdout(), cmd.ErrOrStderr()), "pass health checks")
 		},
 	}
 	rootCmd.AddCommand(health)
@@ -130,6 +103,43 @@ func addCommands() {
 	rootCmd.AddCommand(cmdJSON())
 	rootCmd.AddCommand(cmdServeFS())
 	rootCmd.AddCommand(cmdBridge())
+}
+
+// runHealth GETs each service's health_url and returns how many failed. Services
+// without a health_url are skipped, not failed.
+func runHealth(cfg *config.ManagerConfig, names []string, client *http.Client, out, errOut io.Writer) int {
+	failed := 0
+	for _, name := range names {
+		svc, _ := cfg.ServiceNamed(name)
+		if svc.HealthURL == "" {
+			fmt.Fprintf(out, "%-24s  no health_url configured\n", name)
+			continue
+		}
+		resp, err := client.Get(svc.HealthURL)
+		if err != nil {
+			fmt.Fprintf(errOut, "%-24s  ✗ ERROR: %v\n", name, err)
+			failed++
+			continue
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		var pretty string
+		var obj interface{}
+		if json.Unmarshal(body, &obj) == nil {
+			b, _ := json.MarshalIndent(obj, "                          ", "  ")
+			pretty = string(b)
+		} else {
+			pretty = strings.TrimSpace(string(body))
+		}
+		status := fmt.Sprintf("HTTP %d", resp.StatusCode)
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			fmt.Fprintf(out, "%-24s  ✓ %s  %s\n", name, status, pretty)
+		} else {
+			fmt.Fprintf(errOut, "%-24s  ✗ %s  %s\n", name, status, pretty)
+			failed++
+		}
+	}
+	return failed
 }
 
 func cmdList() *cobra.Command {
@@ -163,10 +173,7 @@ func cmdLog() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			logPath := svc.Log
-			if logPath == "" {
-				logPath = filepath.Join(os.TempDir(), args[0]+".log")
-			}
+			logPath := process.LogPath(svc)
 			fmt.Printf("==> %s <==\n", logPath)
 			for {
 				f, err := os.Open(logPath)
@@ -363,7 +370,7 @@ func cmdAdd() *cobra.Command {
 					}
 				}
 				if svc.Log == "" && svc.Command != "" {
-					suggested := filepath.Join(os.TempDir(), name+".log")
+					suggested := process.LogPath(config.ServiceConfig{Name: name})
 					val := prompt(fmt.Sprintf("Log path [%s]: ", suggested))
 					if strings.TrimSpace(val) == "" {
 						svc.Log = suggested
@@ -774,7 +781,7 @@ func cmdLogsUnified() *cobra.Command {
 				if err != nil {
 					continue
 				}
-				entries = append(entries, logs.Entry{Name: name, Path: svc.Log})
+				entries = append(entries, logs.Entry{Name: name, Path: process.LogPath(svc)})
 			}
 			stop := make(chan struct{})
 			go func() {

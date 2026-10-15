@@ -25,7 +25,8 @@ When building an advanced AI agent setup, you often end up with a fragmented eco
 - `mcp-local health <service>` — GET `health_url` for service(s).
 - `mcp-local logs` — tail unified logs for all services (Ctrl+C to stop).
 - `mcp-local log <service>` — tail individual service log.
-- stdio services detected via PID file (not just port).
+- stdio services are registered only: each agent launches its own copy, so `start` never daemonizes them (`status` shows `on-demand`).
+- `stop` stops the whole process group, verifies the process by PID + start time before signalling, and fails unless the port ends up free. `start`/`stop`/`restart`/`health` exit non-zero on any failure; `restart` builds before stopping.
 - Supports **remote-only** services (no local binary, just `mcp_url`).
 - Supports **filesystem** embedded MCP server (`type: filesystem`).
 
@@ -84,7 +85,7 @@ All settings in `~/.mcp-local/config.yaml`. Sync across machines via Dropbox, iC
 ## Supported MCP Servers
 While it can manage *any* binary, it is optimized for:
 - **ast-context-cache**: Full lifecycle, tool tier env injection, and TUI management.
-- **model-proxy**: stdio process management and registration.
+- **model-proxy**: stdio registration (agents launch it on demand).
 - **Custom Servers**: Add any binary to `config.yaml`.
 
 ## Getting Started
@@ -216,7 +217,7 @@ mcp-local json tools ast-context-cache   # Preview tools.json overrides
 | `mcp_url` | MCP endpoint URL for remote registration |
 | `health_url` | HTTP health check endpoint |
 | `dashboard_url` | Web dashboard URL |
-| `log` | Log file path |
+| `log` | Log file path (default `~/.mcp-local/logs/<name>.log`) |
 | `env` | Environment variables (key-value map) |
 | `build_command` | Shell command to build the service |
 | `no_build_on_start` | Skip build on `start` (default: false, i.e. build runs) |

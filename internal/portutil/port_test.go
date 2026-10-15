@@ -15,10 +15,20 @@ func TestIsRunning_ZeroPort(t *testing.T) {
 	}
 }
 
+// freePort returns a port that was just free; nothing listens on it afterwards.
+func freePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	return port
+}
+
 func TestIsRunning_ClosedPort(t *testing.T) {
-	// Pick a port that's unlikely to be in use
-	// Note: This may occasionally fail if the port happens to be in use
-	if IsRunning(54321) {
+	if IsRunning(freePort(t)) {
 		t.Error("IsRunning on unused port should be false")
 	}
 }
@@ -35,7 +45,7 @@ func TestWaitForPort_ZeroPort(t *testing.T) {
 func TestWaitForPort_Timeout(t *testing.T) {
 	// Use a port that's definitely not listening
 	start := time.Now()
-	result := WaitForPort(54322, 100*time.Millisecond)
+	result := WaitForPort(freePort(t), 100*time.Millisecond)
 	elapsed := time.Since(start)
 
 	if result {

@@ -19,7 +19,8 @@ Guidance for AI coding assistants operating on or through **mcp-local**, the loc
 | Path | Purpose |
 |------|---------|
 | `~/.mcp-local/config.yaml` | Source of truth for services and tool overrides |
-| `~/.mcp-local/pids/<name>.pid` | stdio / process tracking |
+| `~/.mcp-local/pids/<name>.pid` | PID plus start time of each process mcp-local started (JSON; legacy plain-PID files are still read) |
+| `~/.mcp-local/logs/<name>.log` | Default service log (0600) when `log:` is not set |
 | `~/.astcache/tools.json` | Per-tool `enabled` / `tier` / `description` for ast-context-cache |
 | `~/.cursor/mcp.json` | Cursor MCP entries (`mcpServers`) |
 | `~/.config/opencode/opencode.jsonc` (or `.json`) | OpenCode MCP entries (`mcp`) |
@@ -60,7 +61,11 @@ mcp-local rebuild <service>          # build_command + re-register
 
 - **`stop --deregister`** defaults to **true** (removes agent entries). Use `--deregister=false` to leave MCP JSON in place.
 - **`no_build_on_start: true`** on a service skips `build_command` on `start`.
-- HTTP services: running = port in use. stdio services: running = PID file under `~/.mcp-local/pids/`.
+- HTTP services: running = port in use, or the PID file still names the process mcp-local started (PID + start time, so a reused PID is never signalled).
+- **stdio services are registered only, never daemonized**: each agent launches its own copy on demand. `start` runs their build and registers them; `status` shows them as `on-demand`. Remote-only services (`mcp_url`, no `command`) are likewise registered only (`remote`).
+- `stop` signals the whole process group (wrapper children of `npx`/`uv`/scripts too) and reports ✅ only once the process is gone and the port is free. Without a verified PID file it stops the port owner only if it runs the service's binary.
+- `restart` builds first and leaves the running copy alone if the build fails; then stop, then start without a second build. Builds run from the `command`'s directory with a 10-minute timeout.
+- `start`, `stop`, `restart` and `health` exit non-zero when any service fails. `status` is read-only (it never deletes PID files).
 
 ### Agent registration (without restart)
 

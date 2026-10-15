@@ -2,11 +2,14 @@ package statusui
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
+	"github.com/coma-toast/mcp-local/internal/mgr/process"
 	"github.com/coma-toast/mcp-local/internal/mgr/runtime"
 )
 
@@ -25,6 +28,23 @@ type row struct {
 	pid     int
 	port    int
 	uptime  string
+	mode    process.Mode
+	stale   bool
+}
+
+// label is the STATUS column: services mcp-local never runs say why instead of "stopped".
+func (r row) label() string {
+	switch {
+	case r.running:
+		return "running"
+	case r.mode == process.Remote:
+		return "remote"
+	case r.mode == process.Stdio:
+		return "on-demand"
+	case r.stale:
+		return "stale"
+	}
+	return "stopped"
 }
 
 type model struct {
@@ -63,7 +83,7 @@ func (m model) refresh() tea.Cmd {
 			}
 			svc := m.byName[name]
 			st := runtime.CheckStatus(svc)
-			rows = append(rows, row{name: st.Name, running: st.Running, pid: st.PID, port: st.Port, uptime: st.Uptime})
+			rows = append(rows, row{name: st.Name, running: st.Running, pid: st.PID, port: st.Port, uptime: st.Uptime, mode: st.Mode, stale: st.Stale})
 		}
 		return rows
 	}
@@ -94,12 +114,14 @@ func (m model) View() string {
 		colName, "NAME", colStatus, "STATUS", colPID, "PID", colPort, "PORT", colUptime, "UPTIME")
 	out := headerStyle.Render(header) + "\n"
 	for _, r := range m.rows {
-		var statusStr string
-		if r.running {
-			statusStr = runningStyle.Render(fmt.Sprintf("%-*s", colStatus, "running"))
-		} else {
-			statusStr = stoppedStyle.Render(fmt.Sprintf("%-*s", colStatus, "stopped"))
+		style := stoppedStyle
+		switch r.label() {
+		case "running":
+			style = runningStyle
+		case "remote", "on-demand":
+			style = dimStyle
 		}
+		statusStr := style.Render(fmt.Sprintf("%-*s", colStatus, r.label()))
 		pidStr := dimStyle.Render(fmt.Sprintf("%-*s", colPID, "-"))
 		if r.pid > 0 {
 			pidStr = fmt.Sprintf("%-*d", colPID, r.pid)
@@ -119,8 +141,12 @@ func Run(cfg *config.ManagerConfig, filter string) error {
 	return err
 }
 
-// PrintPlain prints a one-shot table (script-friendly).
+// PrintPlain prints a one-shot table (script-friendly) to stdout.
 func PrintPlain(cfg *config.ManagerConfig, filter string) {
+	FprintPlain(os.Stdout, cfg, filter)
+}
+
+func FprintPlain(w io.Writer, cfg *config.ManagerConfig, filter string) {
 	m := newModel(cfg, filter)
 	var rows []row
 	if cmd := m.refresh(); cmd != nil {
@@ -129,17 +155,13 @@ func PrintPlain(cfg *config.ManagerConfig, filter string) {
 		}
 	}
 	colName, colStatus, colPID, colPort := 24, 10, 8, 7
-	fmt.Printf("%-*s %-*s %-*s %-*s\n", colName, "NAME", colStatus, "STATUS", colPID, "PID", colPort, "PORT")
-	fmt.Println("------------------------------------------------------------")
+	fmt.Fprintf(w, "%-*s %-*s %-*s %-*s\n", colName, "NAME", colStatus, "STATUS", colPID, "PID", colPort, "PORT")
+	fmt.Fprintln(w, "------------------------------------------------------------")
 	for _, r := range rows {
-		st := "stopped"
-		if r.running {
-			st = "running"
-		}
 		pid := "-"
 		if r.pid > 0 {
 			pid = fmt.Sprintf("%d", r.pid)
 		}
-		fmt.Printf("%-*s %-*s %-*s %-*d\n", colName, r.name, colStatus, st, colPID, pid, colPort, r.port)
+		fmt.Fprintf(w, "%-*s %-*s %-*s %-*d\n", colName, r.name, colStatus, r.label(), colPID, pid, colPort, r.port)
 	}
 }
