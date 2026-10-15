@@ -2,6 +2,8 @@ package portutil
 
 import (
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -15,10 +17,20 @@ func TestIsRunning_ZeroPort(t *testing.T) {
 	}
 }
 
+// freePort returns a port that was just free; nothing listens on it afterwards.
+func freePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	return port
+}
+
 func TestIsRunning_ClosedPort(t *testing.T) {
-	// Pick a port that's unlikely to be in use
-	// Note: This may occasionally fail if the port happens to be in use
-	if IsRunning(54321) {
+	if IsRunning(freePort(t)) {
 		t.Error("IsRunning on unused port should be false")
 	}
 }
@@ -35,7 +47,7 @@ func TestWaitForPort_ZeroPort(t *testing.T) {
 func TestWaitForPort_Timeout(t *testing.T) {
 	// Use a port that's definitely not listening
 	start := time.Now()
-	result := WaitForPort(54322, 100*time.Millisecond)
+	result := WaitForPort(freePort(t), 100*time.Millisecond)
 	elapsed := time.Since(start)
 
 	if result {
@@ -72,5 +84,35 @@ func TestIsRunning_IPv6LoopbackOnly(t *testing.T) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	if !IsRunning(port) {
 		t.Errorf("IsRunning(%d) should be true for [::1]-only listener", port)
+	}
+}
+
+func TestFetchHealth(t *testing.T) {
+	cases := []struct {
+		code    int
+		body    string
+		healthy bool
+		reason  string
+	}{
+		{200, `{"status":"healthy"}`, true, "healthy"},
+		{200, `ok`, true, "healthy"},
+		{200, `{"status":"starting","startup_message":"Opening databases…"}`, true, "starting Opening databases…"},
+		{200, `{"status":"failed","embed_error":"data directory /Volumes/USB unavailable"}`, false, "failed: data directory /Volumes/USB unavailable"},
+		{200, `{"status":"degraded"}`, false, "degraded"},
+		{503, `down`, false, "health returned HTTP 503: down"},
+	}
+	for _, c := range cases {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(c.code)
+			_, _ = w.Write([]byte(c.body))
+		}))
+		healthy, reason := FetchHealth(srv.URL)
+		srv.Close()
+		if healthy != c.healthy || reason != c.reason {
+			t.Errorf("%d %s: got (%v, %q), want (%v, %q)", c.code, c.body, healthy, reason, c.healthy, c.reason)
+		}
+	}
+	if ok, _ := FetchHealth(""); !ok {
+		t.Error("no health_url should count as healthy")
 	}
 }

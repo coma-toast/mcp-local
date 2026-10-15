@@ -2,11 +2,15 @@ package statusui
 
 import (
 	"fmt"
+	"io"
+	"os"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
+	"github.com/coma-toast/mcp-local/internal/mgr/process"
 	"github.com/coma-toast/mcp-local/internal/mgr/runtime"
 )
 
@@ -15,6 +19,8 @@ var (
 	runningStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 	stoppedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	dimStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	warnStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	orphanStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("208"))
 )
 
 type tickMsg time.Time
@@ -25,6 +31,34 @@ type row struct {
 	pid     int
 	port    int
 	uptime  string
+	mode    process.Mode
+	state   config.StateKind
+	detail  string
+}
+
+// label is the STATUS column: services mcp-local never runs say why instead of "stopped".
+func (r row) label() string {
+	if r.state == config.StateStopped && !r.running {
+		switch r.mode {
+		case process.Remote:
+			return "remote"
+		case process.Stdio:
+			return "on-demand"
+		}
+	}
+	if r.state == "" {
+		return string(config.StateStopped)
+	}
+	return string(r.state)
+}
+
+// detailText is the DETAIL column; it stays empty when the state says it all.
+func (r row) detailText() string {
+	switch r.detail {
+	case "healthy", "running", "stopped":
+		return ""
+	}
+	return r.detail
 }
 
 type model struct {
@@ -63,7 +97,7 @@ func (m model) refresh() tea.Cmd {
 			}
 			svc := m.byName[name]
 			st := runtime.CheckStatus(svc)
-			rows = append(rows, row{name: st.Name, running: st.Running, pid: st.PID, port: st.Port, uptime: st.Uptime})
+			rows = append(rows, row{name: st.Name, running: st.Running, pid: st.PID, port: st.Port, uptime: st.Uptime, mode: st.Mode, state: st.State, detail: st.Detail})
 		}
 		return rows
 	}
@@ -89,23 +123,29 @@ func (m model) View() string {
 	if m.quitting {
 		return ""
 	}
-	colName, colStatus, colPID, colPort, colUptime := 24, 10, 8, 7, 12
-	header := fmt.Sprintf("%-*s %-*s %-*s %-*s %-*s",
-		colName, "NAME", colStatus, "STATUS", colPID, "PID", colPort, "PORT", colUptime, "UPTIME")
+	colName, colStatus, colPID, colPort, colUptime := 24, 13, 8, 7, 12
+	header := fmt.Sprintf("%-*s %-*s %-*s %-*s %-*s %s",
+		colName, "NAME", colStatus, "STATUS", colPID, "PID", colPort, "PORT", colUptime, "UPTIME", "DETAIL")
 	out := headerStyle.Render(header) + "\n"
 	for _, r := range m.rows {
-		var statusStr string
-		if r.running {
-			statusStr = runningStyle.Render(fmt.Sprintf("%-*s", colStatus, "running"))
-		} else {
-			statusStr = stoppedStyle.Render(fmt.Sprintf("%-*s", colStatus, "stopped"))
+		style := stoppedStyle
+		switch r.label() {
+		case "running":
+			style = runningStyle
+		case "degraded", "stale":
+			style = warnStyle
+		case "orphaned":
+			style = orphanStyle
+		case "remote", "on-demand":
+			style = dimStyle
 		}
+		statusStr := style.Render(fmt.Sprintf("%-*s", colStatus, r.label()))
 		pidStr := dimStyle.Render(fmt.Sprintf("%-*s", colPID, "-"))
 		if r.pid > 0 {
 			pidStr = fmt.Sprintf("%-*d", colPID, r.pid)
 		}
-		out += fmt.Sprintf("%-*s %s %s %-*d %-*s\n",
-			colName, r.name, statusStr, pidStr, colPort, r.port, colUptime, r.uptime)
+		out += fmt.Sprintf("%-*s %s %s %-*d %-*s %s\n",
+			colName, r.name, statusStr, pidStr, colPort, r.port, colUptime, r.uptime, dimStyle.Render(r.detailText()))
 	}
 	out += dimStyle.Render("\nPress q to quit")
 	return out
@@ -119,8 +159,12 @@ func Run(cfg *config.ManagerConfig, filter string) error {
 	return err
 }
 
-// PrintPlain prints a one-shot table (script-friendly).
+// PrintPlain prints a one-shot table (script-friendly) to stdout.
 func PrintPlain(cfg *config.ManagerConfig, filter string) {
+	FprintPlain(os.Stdout, cfg, filter)
+}
+
+func FprintPlain(w io.Writer, cfg *config.ManagerConfig, filter string) {
 	m := newModel(cfg, filter)
 	var rows []row
 	if cmd := m.refresh(); cmd != nil {
@@ -128,18 +172,15 @@ func PrintPlain(cfg *config.ManagerConfig, filter string) {
 			rows, _ = msg.([]row)
 		}
 	}
-	colName, colStatus, colPID, colPort := 24, 10, 8, 7
-	fmt.Printf("%-*s %-*s %-*s %-*s\n", colName, "NAME", colStatus, "STATUS", colPID, "PID", colPort, "PORT")
-	fmt.Println("------------------------------------------------------------")
+	colName, colStatus, colPID, colPort := 24, 13, 8, 7
+	fmt.Fprintf(w, "%-*s %-*s %-*s %-*s %s\n", colName, "NAME", colStatus, "STATUS", colPID, "PID", colPort, "PORT", "DETAIL")
+	fmt.Fprintln(w, "--------------------------------------------------------------------------------")
 	for _, r := range rows {
-		st := "stopped"
-		if r.running {
-			st = "running"
-		}
 		pid := "-"
 		if r.pid > 0 {
 			pid = fmt.Sprintf("%d", r.pid)
 		}
-		fmt.Printf("%-*s %-*s %-*s %-*d\n", colName, r.name, colStatus, st, colPID, pid, colPort, r.port)
+		line := fmt.Sprintf("%-*s %-*s %-*s %-*d %s", colName, r.name, colStatus, r.label(), colPID, pid, colPort, r.port, r.detailText())
+		fmt.Fprintln(w, strings.TrimRight(line, " "))
 	}
 }

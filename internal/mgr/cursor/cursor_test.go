@@ -103,3 +103,22 @@ func TestDeregister(t *testing.T) {
 		t.Errorf("mcpServers block should be removed once empty, got %v", block)
 	}
 }
+
+func TestRegisterServices_HeadersAndUserKeysKept(t *testing.T) {
+	path := setupTestCursor(t)
+	os.WriteFile(path, []byte(`{"mcpServers": {"svc": {"command": "npx", "args": ["x"], "timeout": 9}}}`), 0o644)
+	svc := config.ServiceConfig{Name: "svc", MCPURL: "https://x/mcp", Headers: map[string]string{"Authorization": "Bearer t"}}
+	if err := RegisterServices([]config.ServiceConfig{svc}); err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]map[string]map[string]interface{}
+	data, _ := os.ReadFile(path)
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	e := cfg["mcpServers"]["svc"]
+	h, _ := e["headers"].(map[string]interface{})
+	if e["url"] != "https://x/mcp" || h["Authorization"] != "Bearer t" || e["timeout"] != float64(9) || e["command"] != nil || e["args"] != nil {
+		t.Errorf("entry = %v", e)
+	}
+}

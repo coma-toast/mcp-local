@@ -1,8 +1,8 @@
 package runtime
 
 import (
-	"os"
-	"syscall"
+	"fmt"
+	"path/filepath"
 
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
 	"github.com/coma-toast/mcp-local/internal/mgr/process"
@@ -11,52 +11,115 @@ import (
 
 type ServiceStatus struct {
 	Name    string
+	State   config.StateKind
+	Detail  string
 	Running bool
 	PID     int
 	Port    int
 	Uptime  string
+	Mode    process.Mode
+	// Stale is set when a PID file exists but no longer names the process mcp-local
+	// started. Status is read-only, so the file is left for stop or doctor --fix.
+	Stale bool
+	// Orphan is an untracked copy of the service's own binary holding one of its ports
+	// while the main port is down: start replaces it and doctor --fix stops it.
+	Orphan Holder
 }
 
+// IsPIDAlive reports whether pid exists; EPERM (another user's process) counts as alive.
 func IsPIDAlive(pid int) bool {
-	if pid <= 0 {
-		return false
+	return pid > 0 && process.Alive(pid)
+}
+
+// Holder is the process listening on one of a service's ports.
+type Holder struct {
+	Port int
+	PID  int
+	Exe  string
+	Same bool // runs the service's own binary
+}
+
+// Lookups used by CheckStatus; variables so tests can fake them.
+var (
+	portListening = portutil.IsRunning
+	portOwner     = portutil.FindPID
+	procInfo      = process.ProcInfo
+	fetchHealth   = portutil.FetchHealth
+)
+
+// HolderOf reports who listens on port, or ok=false when nothing does.
+func HolderOf(svc config.ServiceConfig, port int) (Holder, bool) {
+	if port <= 0 || !portListening(port) {
+		return Holder{}, false
 	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
+	h := Holder{Port: port, PID: portOwner(port)}
+	if h.PID > 0 {
+		if _, exe, err := procInfo(h.PID); err == nil {
+			h.Exe = exe
+			h.Same = process.SameBinary(exe, process.ExpectedExe(svc))
+		}
 	}
-	return proc.Signal(syscall.Signal(0)) == nil
+	return h, true
 }
 
 func CheckStatus(svc config.ServiceConfig) ServiceStatus {
-	status := ServiceStatus{
-		Name: svc.Name,
-		Port: svc.Port,
+	st := ServiceStatus{Name: svc.Name, Port: svc.Port, Mode: process.ModeOf(svc), State: config.StateStopped, Detail: "stopped"}
+	if h, ok := HolderOf(svc, svc.Port); ok {
+		st.setPID(h.PID)
+		st.Running, st.State, st.Detail = true, config.StateRunning, "healthy"
+		if healthy, why := fetchHealth(svc.HealthURL); !healthy {
+			st.State, st.Detail = config.StateDegraded, why
+		}
+		return st
 	}
-
-	if svc.Port > 0 {
-		if portutil.IsRunning(svc.Port) {
-			status.Running = true
-			pid := portutil.FindPID(svc.Port)
-			if pid > 0 {
-				status.PID = pid
-				status.Uptime = portutil.GetUptime(pid)
+	if id, err := process.LoadIdentity(svc.Name); err == nil {
+		if id.Check(process.ExpectedExe(svc)) == process.Match {
+			st.setPID(id.PID)
+			if svc.Port <= 0 {
+				st.Running, st.State, st.Detail = true, config.StateRunning, "running"
+				return st
 			}
-			return status
+			// Possibly still starting up, so only restart (explicit) replaces it.
+			st.State = config.StateDegraded
+			st.Detail = fmt.Sprintf("process alive (pid %d) but port %d not listening", id.PID, svc.Port)
+			return st
 		}
+		st.Stale, st.State = true, config.StateStale
+		st.Detail = fmt.Sprintf("PID file names pid %d, which is not the process mcp-local started", id.PID)
 	}
-
-	if pid, err := process.LoadPID(svc.Name); err == nil {
-		if IsPIDAlive(pid) {
-			status.Running = true
-			status.PID = pid
-			status.Uptime = portutil.GetUptime(pid)
-			return status
+	for _, p := range svc.OwnedPorts() {
+		if p == svc.Port {
+			continue
 		}
-		_ = process.RemovePID(svc.Name)
+		h, ok := HolderOf(svc, p)
+		if !ok {
+			continue
+		}
+		st.setPID(h.PID)
+		if h.Same {
+			st.Orphan, st.State = h, config.StateOrphaned
+			st.Detail = fmt.Sprintf("port %d held by an untracked %s (pid %d) while port %d is down", p, describeExe(h.Exe), h.PID, svc.Port)
+		} else {
+			st.State = config.StateConflict
+			st.Detail = fmt.Sprintf("port %d held by another program, %s (pid %d)", p, describeExe(h.Exe), h.PID)
+		}
+		return st
 	}
+	return st
+}
 
-	return status
+func (st *ServiceStatus) setPID(pid int) {
+	st.PID = pid
+	if pid > 0 {
+		st.Uptime = portutil.GetUptime(pid)
+	}
+}
+
+func describeExe(exe string) string {
+	if exe == "" {
+		return "an unknown program"
+	}
+	return filepath.Base(exe)
 }
 
 func CheckAll(cfg *config.ManagerConfig, filter string) []ServiceStatus {

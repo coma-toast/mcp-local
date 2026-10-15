@@ -2,12 +2,16 @@
 //
 // Files are parsed with hujson and only the managed key path is patched (RFC 6902),
 // so comments, key order, trailing commas, and formatting elsewhere survive byte-for-byte.
-// Every modification backs up the original under ~/.mcp-local/backups and is written atomically.
+// Within an existing entry only the keys mcp-local manages are rewritten; the user's own keys
+// (enabled, disabled, timeout, ...) are kept. Every modification backs up the original under
+// ~/.mcp-local/backups and is written atomically; the names written are recorded in a ledger
+// so removal can tell mcp-local's entries from the user's.
 package jsonagent
 
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -15,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
+	"github.com/coma-toast/mcp-local/internal/mgr/safefile"
 	"github.com/tailscale/hujson"
 )
 
@@ -24,17 +29,36 @@ type Agent struct {
 	configPath   string
 	blockKey     string
 	convertEntry EntryConverter
+	managed      []string
 }
 
-func New(configPath string, blockKey string, convert EntryConverter) Agent {
-	return Agent{configPath: configPath, blockKey: blockKey, convertEntry: convert}
+// New returns an agent editing blockKey in configPath. managed lists the entry keys mcp-local
+// owns: they are overwritten, and removed when the new entry no longer has them. Other keys the
+// converter emits are defaults, written only when the entry lacks them. With no managed keys,
+// every key the converter emits is managed and nothing is removed.
+func New(configPath string, blockKey string, convert EntryConverter, managed ...string) Agent {
+	return Agent{configPath: configPath, blockKey: blockKey, convertEntry: convert, managed: managed}
 }
 
 func (a Agent) ConfigPath() string { return a.configPath }
 
+// Has reports whether the block has an entry named name.
+func (a Agent) Has(name string) bool {
+	m, err := ReadJSON(a.configPath)
+	if err != nil {
+		return false
+	}
+	b, _ := m[a.blockKey].(map[string]interface{})
+	_, ok := b[name]
+	return ok
+}
+
+// Owns reports whether mcp-local wrote the entry name (per the ledger).
+func (a Agent) Owns(name string) bool { return safefile.Recorded(a.configPath, a.blockKey, name) }
+
 // ParseJSONC decodes JSON or JSONC (comments, trailing commas) into a generic map.
 func ParseJSONC(raw []byte) (map[string]interface{}, error) {
-	std, err := hujson.Standardize(raw)
+	std, err := hujson.Standardize(bytes.TrimPrefix(raw, bom))
 	if err != nil {
 		return nil, err
 	}
@@ -58,17 +82,20 @@ func ReadJSON(path string) (map[string]interface{}, error) {
 	return m, nil
 }
 
-// RegisterServices converts and upserts every service into the block.
+// RegisterServices converts and upserts every service into the block. A service that can't be
+// converted is reported but doesn't stop the others.
 func (a Agent) RegisterServices(services []config.ServiceConfig) error {
 	entries := make(map[string]map[string]interface{}, len(services))
+	var errs []error
 	for _, s := range services {
 		entry, err := config.ServiceToEntry(s)
 		if err != nil {
-			return fmt.Errorf("%s: %w", s.Name, err)
+			errs = append(errs, fmt.Errorf("%s: %w", s.Name, err))
+			continue
 		}
 		entries[s.Name] = a.convertEntry(entry)
 	}
-	return a.SetEntries(entries)
+	return errors.Join(append(errs, a.SetEntries(entries))...)
 }
 
 // RegisterRemote upserts a URL entry; an existing entry with the same url is left untouched.
@@ -133,6 +160,8 @@ func (a Agent) Deregister(name string) (bool, error) {
 	return found, err
 }
 
+var bom = []byte("\xef\xbb\xbf")
+
 func (a Agent) edit(fn func(d *doc) error) error {
 	path := resolvePath(a.configPath)
 	raw, err := os.ReadFile(path)
@@ -140,7 +169,13 @@ func (a Agent) edit(fn func(d *doc) error) error {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	src := raw
+	// Edit without the BOM and with LF endings; both are restored on write.
+	src := bytes.TrimPrefix(raw, bom)
+	hasBOM := len(src) != len(raw)
+	crlf := bytes.Contains(src, []byte("\r\n"))
+	if crlf {
+		src = bytes.ReplaceAll(src, []byte("\r\n"), []byte("\n"))
+	}
 	if len(bytes.TrimSpace(src)) == 0 {
 		src = []byte("{\n}\n")
 	}
@@ -151,22 +186,39 @@ func (a Agent) edit(fn func(d *doc) error) error {
 	if _, ok := v.Value.(*hujson.Object); !ok {
 		return fmt.Errorf("parse %s: top-level value is not an object", a.configPath)
 	}
-	d := &doc{v: &v, blockKey: a.blockKey, path: path}
+	d := &doc{v: &v, blockKey: a.blockKey, path: path, managed: a.managed}
+	if err := duplicateKey(d.root()); err != nil {
+		return fmt.Errorf("%s: %w", a.configPath, err)
+	}
+	if b := d.block(); b != nil {
+		if err := duplicateKey(b); err != nil {
+			return fmt.Errorf("%s: %s: %w", a.configPath, a.blockKey, err)
+		}
+	}
 	if err := fn(d); err != nil {
 		return fmt.Errorf("%s: %w", a.configPath, err)
 	}
-	if !d.changed {
-		return nil
-	}
-	if exists {
-		if err := backup(a.configPath, raw); err != nil {
-			return fmt.Errorf("backup %s: %w", a.configPath, err)
+	if d.changed {
+		out := v.Pack()
+		if crlf {
+			out = bytes.ReplaceAll(out, []byte("\n"), []byte("\r\n"))
+		}
+		if hasBOM {
+			out = append(append([]byte{}, bom...), out...)
+		}
+		if exists {
+			if err := safefile.Backup(a.configPath, raw); err != nil {
+				return fmt.Errorf("backup %s: %w", a.configPath, err)
+			}
+		}
+		if err := safefile.AtomicWrite(path, out); err != nil {
+			return err
+		}
+		if err := d.saveOwnership(); err != nil {
+			return err
 		}
 	}
-	if err := atomicWrite(path, v.Pack()); err != nil {
-		return err
-	}
-	return d.saveOwnership()
+	return safefile.Record(a.configPath, a.blockKey, d.written, d.removed)
 }
 
 // doc is a parsed config plus helpers that patch only /<blockKey>/<name> paths.
@@ -174,8 +226,28 @@ type doc struct {
 	v        *hujson.Value
 	blockKey string
 	path     string
+	managed  []string
 	changed  bool
-	created  *bool // block ownership change to persist; nil = none
+	created  *bool    // block ownership change to persist; nil = none
+	written  []string // entry names set (for the ledger)
+	removed  []string // entry names removed
+}
+
+// duplicateKey rejects an object with a repeated key: patches would edit the first while
+// editors and JSON parsers read the last.
+func duplicateKey(obj *hujson.Object) error {
+	seen := map[string]bool{}
+	for _, m := range obj.Members {
+		lit, ok := m.Name.Value.(hujson.Literal)
+		if !ok {
+			continue
+		}
+		if seen[lit.String()] {
+			return fmt.Errorf("duplicate key %q; remove one copy and retry", lit.String())
+		}
+		seen[lit.String()] = true
+	}
+	return nil
 }
 
 var pointerEscaper = strings.NewReplacer("~", "~0", "/", "~1")
@@ -250,11 +322,15 @@ func (d *doc) ensureBlock() error {
 }
 
 func (d *doc) set(name string, entry map[string]interface{}) error {
+	d.written = append(d.written, name)
 	want, err := normalize(entry)
 	if err != nil {
 		return err
 	}
 	if ev := d.v.Find(pointer(d.blockKey, name)); ev != nil {
+		if obj, ok := ev.Value.(*hujson.Object); ok {
+			return d.merge(name, ev, obj, entry)
+		}
 		var have interface{}
 		if decodeValue(*ev, &have) == nil && reflect.DeepEqual(have, want) {
 			return nil
@@ -282,21 +358,129 @@ func (d *doc) set(name string, entry map[string]interface{}) error {
 	return nil
 }
 
-func (d *doc) remove(name string) (bool, error) {
-	obj := d.block()
-	if obj == nil || d.v.Find(pointer(d.blockKey, name)) == nil {
-		return false, nil
+func (d *doc) isManaged(key string) bool {
+	if len(d.managed) == 0 {
+		return true
 	}
-	closeIndent := memberIndent(d.root(), d.blockKey, "")
+	for _, k := range d.managed {
+		if k == key {
+			return true
+		}
+	}
+	return false
+}
+
+// merge updates an existing entry object in place: managed keys are set (or removed when
+// entry lacks them), other keys of entry are added only when missing, and the rest is kept.
+func (d *doc) merge(name string, ev *hujson.Value, obj *hujson.Object, entry map[string]interface{}) error {
+	if err := duplicateKey(obj); err != nil {
+		return fmt.Errorf("%s/%s: %w", d.blockKey, name, err)
+	}
+	var have map[string]interface{}
+	if err := decodeValue(*ev, &have); err != nil {
+		return err
+	}
+	keys := make([]string, 0, len(entry))
+	for k := range entry {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		want, err := normalize(entry[k])
+		if err != nil {
+			return err
+		}
+		cur, present := have[k]
+		if present && (!d.isManaged(k) || reflect.DeepEqual(cur, want)) {
+			continue
+		}
+		if err := d.setMember(name, obj, k, entry[k], present); err != nil {
+			return err
+		}
+	}
+	for _, k := range d.managed {
+		if _, keep := entry[k]; keep {
+			continue
+		}
+		if _, present := have[k]; present {
+			if err := d.removeMember(obj, pointer(d.blockKey, name, k), memberIndent(d.block(), name, "")); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// setMember writes key in the entry object, matching its layout (multi-line or one line).
+func (d *doc) setMember(name string, obj *hujson.Object, key string, value interface{}, present bool) error {
+	unit := indentUnit(d.root())
+	blockIndent := memberIndent(d.root(), d.blockKey, unit)
+	entryIndent := memberIndent(d.block(), name, blockIndent+unit)
+	multiline := len(obj.Members) == 0 || bytes.Contains(obj.Members[0].Name.BeforeExtra, []byte("\n"))
+	keyIndent := firstIndent(obj, entryIndent+unit)
+	var raw []byte
+	var err error
+	if multiline {
+		raw, err = json.MarshalIndent(value, keyIndent, unit)
+	} else {
+		raw, err = json.Marshal(value)
+	}
+	if err != nil {
+		return err
+	}
+	var before, after hujson.Extra
+	if present {
+		for _, m := range obj.Members {
+			if lit, ok := m.Name.Value.(hujson.Literal); ok && lit.String() == key {
+				before, after = m.Value.BeforeExtra, m.Value.AfterExtra
+			}
+		}
+	}
 	trailing := hasTrailingComma(obj)
-	if err := d.patch("remove", pointer(d.blockKey, name), nil); err != nil {
-		return false, err
+	if err := d.patch("add", pointer(d.blockKey, name, key), raw); err != nil {
+		return err
+	}
+	for i := range obj.Members {
+		m := &obj.Members[i]
+		if lit, ok := m.Name.Value.(hujson.Literal); !ok || lit.String() != key {
+			continue
+		}
+		switch {
+		case present:
+			m.Value.BeforeExtra, m.Value.AfterExtra = before, after
+		case multiline:
+			fixInsert(obj, entryIndent, strings.TrimPrefix(keyIndent, entryIndent), trailing)
+		default:
+			m.Name.BeforeExtra, m.Value.BeforeExtra = hujson.Extra(" "), hujson.Extra(" ")
+		}
+	}
+	return nil
+}
+
+// removeMember removes the member at path from obj, keeping obj's trailing-comma style and
+// closing-brace indentation.
+func (d *doc) removeMember(obj *hujson.Object, path, closeIndent string) error {
+	trailing := hasTrailingComma(obj)
+	if err := d.patch("remove", path, nil); err != nil {
+		return err
 	}
 	if n := len(obj.Members); trailing && n > 0 && obj.Members[n-1].Value.AfterExtra == nil {
 		obj.Members[n-1].Value.AfterExtra = hujson.Extra{}
 	}
 	if _, ok := indentOf(obj.AfterExtra); ok {
 		obj.AfterExtra = append(bytes.TrimRight(obj.AfterExtra, " \t"), closeIndent...)
+	}
+	return nil
+}
+
+func (d *doc) remove(name string) (bool, error) {
+	obj := d.block()
+	if obj == nil || d.v.Find(pointer(d.blockKey, name)) == nil {
+		return false, nil
+	}
+	d.removed = append(d.removed, name)
+	if err := d.removeMember(obj, pointer(d.blockKey, name), memberIndent(d.root(), d.blockKey, "")); err != nil {
+		return false, err
 	}
 	if len(obj.Members) > 0 {
 		return true, nil

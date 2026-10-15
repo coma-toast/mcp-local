@@ -23,7 +23,13 @@ func cmdBridge() *cobra.Command {
 		Short: "Bridge stdio JSON-RPC to a Streamable HTTP MCP server",
 		Long: `Reads newline-delimited JSON-RPC from stdin, POSTs each message to <url> using the
 MCP Streamable HTTP transport, and writes every server message to stdout as one line.
-Used for hosts that only launch stdio servers (e.g. Claude Desktop). Logs go to stderr.`,
+Used for hosts that only launch stdio servers (e.g. Claude Desktop). Logs go to stderr.
+
+If the server forgets the session (HTTP 404, e.g. after a restart), the bridge replays the
+client's initialize and retries, so the host never notices. --timeout bounds the wait for
+response headers and any silence on a call's response stream; a long tool call that keeps
+streaming is never cut off. When the bridge gives up on a request it tells the server
+(notifications/cancelled) and returns a JSON-RPC error to the client.`,
 		Args: cobra.ExactArgs(1),
 		Example: `  mcp-local bridge http://localhost:7821/mcp
   mcp-local bridge https://api.example.com/mcp --header "Authorization=Bearer $TOKEN"`,
@@ -50,6 +56,6 @@ Used for hosts that only launch stdio servers (e.g. Claude Desktop). Logs go to 
 		},
 	}
 	c.Flags().StringArrayVar(&headers, "header", nil, "extra HTTP header key=value (repeatable)")
-	c.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "per-request timeout")
+	c.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "max wait for response headers, and max silence on a call's response stream")
 	return c
 }

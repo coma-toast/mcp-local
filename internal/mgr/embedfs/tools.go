@@ -183,14 +183,15 @@ func handleListDir(root string, raw json.RawMessage) (string, error) {
 	}
 	var b strings.Builder
 	for _, e := range entries {
-		info, _ := e.Info()
-		mode := info.Mode().String()
-		size := info.Size()
+		info, err := e.Info()
+		if err != nil {
+			continue // removed since ReadDir
+		}
 		name := e.Name()
 		if e.IsDir() {
 			name += "/"
 		}
-		fmt.Fprintf(&b, "%-6s %8d  %s\n", mode, size, name)
+		fmt.Fprintf(&b, "%-6s %8d  %s\n", info.Mode().String(), info.Size(), name)
 	}
 	return b.String(), nil
 }
@@ -200,6 +201,10 @@ func handleSearchFiles(root string, raw json.RawMessage) (string, error) {
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", fmt.Errorf("invalid args: %w", err)
 	}
+	if _, err := filepath.Match(a.Pattern, ""); err != nil {
+		return "", fmt.Errorf("invalid pattern %q: %w", a.Pattern, err)
+	}
+	// WalkDir does not descend into symlinked directories, so this stays under root.
 	var matches []string
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {

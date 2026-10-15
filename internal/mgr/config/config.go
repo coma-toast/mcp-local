@@ -2,9 +2,11 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -17,21 +19,23 @@ type AgentsConfig struct {
 }
 
 type ServiceConfig struct {
-	Name            string            `yaml:"name"`
-	Command         string            `yaml:"command"`
-	Args            []string          `yaml:"args"`
-	Env             map[string]string `yaml:"env"`
-	Port            int               `yaml:"port"`
-	MCPType         string            `yaml:"type"`
-	BuildCmd        string            `yaml:"build_cmd"`
-	BuildCommand    string            `yaml:"build_command,omitempty"`
-	NoBuildOnStart  bool              `yaml:"no_build_on_start,omitempty"`
-	Deps            []string          `yaml:"deps"`
-	Description     string            `yaml:"description"`
-	Tools           []ToolConfig      `yaml:"tools"`
-	HealthURL       string            `yaml:"health_url,omitempty"`
-	DashboardURL    string            `yaml:"dashboard_url,omitempty"`
-	MCPURL          string            `yaml:"mcp_url,omitempty"`
+	Name           string            `yaml:"name"`
+	Command        string            `yaml:"command,omitempty"`
+	Args           []string          `yaml:"args,omitempty"`
+	Env            map[string]string `yaml:"env,omitempty"`
+	Port           int               `yaml:"port,omitempty"`
+	MCPType        string            `yaml:"type,omitempty"`
+	BuildCmd       string            `yaml:"build_cmd,omitempty"`
+	BuildCommand   string            `yaml:"build_command,omitempty"`
+	NoBuildOnStart bool              `yaml:"no_build_on_start,omitempty"`
+	Deps           []string          `yaml:"deps,omitempty"`
+	Description    string            `yaml:"description,omitempty"`
+	Tools          []ToolConfig      `yaml:"tools,omitempty"`
+	HealthURL      string            `yaml:"health_url,omitempty"`
+	DashboardURL   string            `yaml:"dashboard_url,omitempty"`
+	MCPURL         string            `yaml:"mcp_url,omitempty"`
+	// Headers are sent to an HTTP service (written into each host's entry where supported).
+	Headers         map[string]string `yaml:"headers,omitempty"`
 	Log             string            `yaml:"log,omitempty"`
 	ActiveTier      string            `yaml:"active_tier,omitempty"`
 	CodeMode        bool              `yaml:"code_mode,omitempty"`
@@ -41,6 +45,63 @@ type ServiceConfig struct {
 	// Installer delegates agent registration to the service's own CLI ("ast-mcp"),
 	// or "native" to force mcp-local's writers. Empty = auto-detect from command.
 	Installer string `yaml:"installer,omitempty"`
+	// ExtraPorts are additional ports the service owns (e.g. dashboard, admin).
+	ExtraPorts []int `yaml:"extra_ports,omitempty"`
+}
+
+// StateKind classifies a service's live state for status/doctor output.
+type StateKind string
+
+const (
+	StateRunning  StateKind = "running"
+	StateDegraded StateKind = "degraded"
+	StateOrphaned StateKind = "orphaned"
+	StateConflict StateKind = "port conflict"
+	StateStopped  StateKind = "stopped"
+	StateStale    StateKind = "stale"
+)
+
+// OwnedPorts returns every local port this service owns: port, the ports of localhost
+// dashboard_url/health_url/mcp_url, and extra_ports. Remote URLs contribute nothing.
+func (s ServiceConfig) OwnedPorts() []int {
+	seen := make(map[int]bool)
+	var ports []int
+	add := func(p int) {
+		if p <= 0 || seen[p] {
+			return
+		}
+		seen[p] = true
+		ports = append(ports, p)
+	}
+	add(s.Port)
+	if p := portFromURL(s.DashboardURL); p > 0 {
+		add(p)
+	}
+	if p := portFromURL(s.HealthURL); p > 0 {
+		add(p)
+	}
+	if p := portFromURL(s.MCPURL); p > 0 {
+		add(p)
+	}
+	for _, p := range s.ExtraPorts {
+		add(p)
+	}
+	return ports
+}
+
+// portFromURL returns the explicit port of a localhost http(s) URL, or 0.
+func portFromURL(raw string) int {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return 0
+	}
+	switch h := u.Hostname(); {
+	case strings.EqualFold(h, "localhost"), h == "127.0.0.1", h == "::1":
+	default:
+		return 0
+	}
+	p, _ := strconv.Atoi(u.Port())
+	return p
 }
 
 const (
@@ -48,22 +109,58 @@ const (
 	InstallerNative = "native"
 )
 
+// ToolConfig is one tool's settings. In YAML a missing `enabled:` means enabled, and
+// `enabled: true` is not written back.
 type ToolConfig struct {
+	Name        string
+	Enabled     bool
+	Tier        string
+	Description string
+	InputSchema map[string]interface{}
+}
+
+type toolYAML struct {
 	Name        string                 `yaml:"name"`
-	Enabled     bool                   `yaml:"enabled"`
-	Tier        string                 `yaml:"tier"`
-	Description string                 `yaml:"description"`
+	Enabled     *bool                  `yaml:"enabled,omitempty"`
+	Tier        string                 `yaml:"tier,omitempty"`
+	Description string                 `yaml:"description,omitempty"`
 	InputSchema map[string]interface{} `yaml:"input_schema,omitempty"`
+}
+
+func (t *ToolConfig) UnmarshalYAML(n *yaml.Node) error {
+	var y toolYAML
+	if err := n.Decode(&y); err != nil {
+		return err
+	}
+	*t = ToolConfig{Name: y.Name, Enabled: y.Enabled == nil || *y.Enabled, Tier: y.Tier, Description: y.Description, InputSchema: y.InputSchema}
+	return nil
+}
+
+func (t ToolConfig) MarshalYAML() (interface{}, error) {
+	y := toolYAML{Name: t.Name, Tier: t.Tier, Description: t.Description, InputSchema: t.InputSchema}
+	if !t.Enabled {
+		y.Enabled = &t.Enabled
+	}
+	return y, nil
 }
 
 type ManagerConfig struct {
 	Services []ServiceConfig `yaml:"services"`
-	Agents   AgentsConfig    `yaml:"agents,omitempty"`
+	// Agents is nil when config.yaml has no `agents:` key (legacy: register with every host).
+	Agents *AgentsConfig `yaml:"agents,omitempty"`
+
+	doc *yaml.Node               // the file as loaded, so saves keep comments and unknown keys
+	raw map[string]ServiceConfig // services as written in the file (unexpanded), by name
 }
 
+// IsHTTP reports whether s is reached over HTTP: type http, a port (unless type stdio), or
+// only an mcp_url (a remote service).
 func (s ServiceConfig) IsHTTP() bool {
 	t := strings.ToLower(strings.TrimSpace(s.MCPType))
-	return t == "http" || (s.Port > 0 && t != "stdio")
+	if t == "stdio" {
+		return false
+	}
+	return t == "http" || s.Port > 0 || (strings.TrimSpace(s.Command) == "" && strings.TrimSpace(s.MCPURL) != "")
 }
 
 // EffectiveInstaller returns the installer that owns agent registration for s
@@ -112,9 +209,6 @@ func ExpandService(s *ServiceConfig) {
 	s.Log = ExpandPath(s.Log)
 	s.Path = ExpandPath(s.Path)
 	s.ToolsConfigPath = ExpandPath(s.ToolsConfigPath)
-	if s.Installer == "" {
-		s.Installer = s.EffectiveInstaller()
-	}
 	for i := range s.Deps {
 		s.Deps[i] = ExpandPath(s.Deps[i])
 	}
@@ -133,6 +227,8 @@ func GetConfigPath() (string, error) {
 	return filepath.Join(home, ".mcp-local", "config.yaml"), nil
 }
 
+// LoadConfig reads config.yaml. Services come back with paths expanded; the file's own
+// (unexpanded) form is kept so SaveConfig can write it back unchanged.
 func LoadConfig() (*ManagerConfig, error) {
 	path, err := GetConfigPath()
 	if err != nil {
@@ -142,29 +238,35 @@ func LoadConfig() (*ManagerConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	var cfg ManagerConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	return parseConfig(data)
+}
+
+func parseConfig(data []byte) (*ManagerConfig, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, err
 	}
+	var cfg, raw ManagerConfig
+	if len(doc.Content) > 0 {
+		if err := doc.Decode(&cfg); err != nil {
+			return nil, err
+		}
+		_ = doc.Decode(&raw)
+		cfg.doc = &doc
+	}
+	cfg.raw = byName(raw.Services)
 	for i := range cfg.Services {
 		ExpandService(&cfg.Services[i])
 	}
 	return &cfg, nil
 }
 
-func SaveConfig(cfg *ManagerConfig) error {
-	path, err := GetConfigPath()
-	if err != nil {
-		return err
+func byName(services []ServiceConfig) map[string]ServiceConfig {
+	m := make(map[string]ServiceConfig, len(services))
+	for _, s := range services {
+		m[s.Name] = s
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-	data, err := yaml.Marshal(cfg)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0644)
+	return m
 }
 
 func ExpandPath(path string) string {

@@ -1,8 +1,11 @@
 package portutil
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -120,4 +123,47 @@ func GetUptime(pid int) string {
 		return fmt.Sprintf("%d-%02d:%02d:%02d", days, hours, mins, secs)
 	}
 	return fmt.Sprintf("%02d:%02d:%02d", hours, mins, secs)
+}
+
+// FetchHealth GETs healthURL and reports whether the service says it is healthy, with a
+// one-line reason when it isn't. It understands the JSON shape ast-context-cache serves
+// (status, embed_error, startup_message) and treats any other 2xx body as healthy.
+func FetchHealth(healthURL string) (bool, string) {
+	if healthURL == "" {
+		return true, ""
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(healthURL)
+	if err != nil {
+		return false, fmt.Sprintf("health check failed: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return false, fmt.Sprintf("health returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var h struct {
+		Status         string `json:"status"`
+		Error          string `json:"error"`
+		EmbedError     string `json:"embed_error"`
+		StartupMessage string `json:"startup_message"`
+	}
+	if json.Unmarshal(body, &h) != nil {
+		return true, "healthy"
+	}
+	switch strings.ToLower(h.Status) {
+	case "", "ok", "healthy":
+		return true, "healthy"
+	case "starting":
+		// Still warming up; not a fault to fix.
+		return true, strings.TrimSpace("starting " + h.StartupMessage)
+	}
+	reason := h.Status
+	for _, extra := range []string{h.Error, h.EmbedError, h.StartupMessage} {
+		if extra != "" {
+			reason += ": " + extra
+			break
+		}
+	}
+	return false, reason
 }

@@ -21,7 +21,7 @@ func TestDefaultTargets(t *testing.T) {
 
 func TestTargetsFromConfig_WithAgentsConfig(t *testing.T) {
 	cfg := config.ManagerConfig{
-		Agents: config.AgentsConfig{
+		Agents: &config.AgentsConfig{
 			OpenCode: true,
 			Cursor:   false,
 			Claude:   true,
@@ -39,20 +39,24 @@ func TestTargetsFromConfig_WithAgentsConfig(t *testing.T) {
 	}
 }
 
-func TestTargetsFromConfig_EmptyAgentsConfig(t *testing.T) {
-	cfg := config.ManagerConfig{
-		Agents: config.AgentsConfig{}, // all zero values
-	}
-	targets := TargetsFromConfig(cfg)
+func TestTargetsFromConfig_NoAgentsKey(t *testing.T) {
+	targets := TargetsFromConfig(config.ManagerConfig{})
 	if !targets.OpenCode || !targets.Cursor || !targets.Claude {
 		t.Error("Should default to all true when no agents config specified")
+	}
+}
+
+func TestTargetsFromConfig_AllFalseMeansNone(t *testing.T) {
+	targets := TargetsFromConfig(config.ManagerConfig{Agents: &config.AgentsConfig{}})
+	if len(targets.Hosts()) != 0 {
+		t.Errorf("agents: with every host false should register nowhere, got %v", targets.Hosts())
 	}
 }
 
 func TestTargetsFromConfig_PartialAgentsConfig(t *testing.T) {
 	// When at least one agent is explicitly set, others should default to false
 	cfg := config.ManagerConfig{
-		Agents: config.AgentsConfig{
+		Agents: &config.AgentsConfig{
 			OpenCode: true,
 			// Cursor and Claude not set = false
 		},

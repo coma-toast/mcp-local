@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
@@ -161,5 +162,30 @@ func TestEntryToClaude_StdioNoArgs(t *testing.T) {
 	}
 	if _, ok := result["env"]; ok {
 		t.Error("env should not be present when empty")
+	}
+}
+
+func TestEntryToClaude_BridgeHeaders(t *testing.T) {
+	setupHome(t)
+	result := entryToClaude(config.AgentEntry{Type: "remote", URL: "https://x/mcp", Headers: map[string]string{"B": "2", "A": "1=1"}})
+	args, _ := result["args"].([]string)
+	want := []string{"bridge", "https://x/mcp", "--header", "A=1=1", "--header", "B=2"}
+	if strings.Join(args, " ") != strings.Join(want, " ") {
+		t.Errorf("args = %v, want %v", args, want)
+	}
+}
+
+func TestRegisterServices_KeepsDisabled(t *testing.T) {
+	setupHome(t)
+	path := ConfigPath()
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	os.WriteFile(path, []byte(`{"mcpServers": {"svc": {"type": "stdio", "command": "/old", "disabled": true}}}`), 0o644)
+	if err := RegisterServices([]config.ServiceConfig{{Name: "svc", MCPURL: "http://localhost:9/mcp"}}); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := jsonagent.ReadJSON(path)
+	e := m["mcpServers"].(map[string]interface{})["svc"].(map[string]interface{})
+	if e["disabled"] != true || e["command"] != "/opt/bin/mcp-local" || e["type"] != nil {
+		t.Errorf("entry = %v", e)
 	}
 }
