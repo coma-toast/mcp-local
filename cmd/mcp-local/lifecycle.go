@@ -158,7 +158,14 @@ func runningPID(name string, svc config.ServiceConfig) (int, bool) {
 // only registered: there is nothing to run, or the agents launch them on demand.
 func startOne(name string, svc config.ServiceConfig, build bool, errOut io.Writer) error {
 	mode := process.ModeOf(svc)
+	if mode != process.Embedded && strings.TrimSpace(svc.Command) == "" && strings.TrimSpace(svc.MCPURL) == "" {
+		return fmt.Errorf("no command or mcp_url configured")
+	}
 	if mode == process.Remote {
+		if svc.Port > 0 && !portutil.IsRunning(svc.Port) {
+			fmt.Printf("  ⚠️  %s: remote; nothing listening on port %d (start the external server), registering only\n", name, svc.Port)
+			return nil
+		}
 		fmt.Printf("  🌐 %s: remote (%s), registering only\n", name, svc.MCPURL)
 		return nil
 	}

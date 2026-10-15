@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -183,6 +184,30 @@ func TestStart_RemoteAndStdioRegisterOnly(t *testing.T) {
 		if _, err := os.Stat(process.GetPIDFile(name)); !os.IsNotExist(err) {
 			t.Errorf("%s was spawned", name)
 		}
+	}
+}
+
+func TestStart_RemoteWithIdlePortStillRegisters(t *testing.T) {
+	lifecycleEnv(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	cfg := &config.ManagerConfig{Services: []config.ServiceConfig{{Name: "remote", MCPURL: fmt.Sprintf("http://localhost:%d/mcp", port), Port: port}}}
+	started, failed := startServices(cfg, cfg.SortedNames(), true, io.Discard)
+	if failed != 0 || len(started) != 1 {
+		t.Fatalf("started=%d failed=%d, want registered despite the idle port", len(started), failed)
+	}
+}
+
+func TestStart_NoCommandNoURLFails(t *testing.T) {
+	lifecycleEnv(t)
+	cfg := &config.ManagerConfig{Services: []config.ServiceConfig{{Name: "empty", Port: 1}, {Name: "empty-stdio", MCPType: "stdio"}}}
+	started, failed := startServices(cfg, cfg.SortedNames(), true, io.Discard)
+	if failed != 2 || len(started) != 0 {
+		t.Fatalf("started=%d failed=%d, want both to fail", len(started), failed)
 	}
 }
 
