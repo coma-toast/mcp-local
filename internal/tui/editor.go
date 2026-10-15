@@ -126,12 +126,17 @@ func setBuild(s *config.ServiceConfig, v string) {
 func (m editModel) View() string {
 	var s strings.Builder
 	s.WriteString(titleStyle.Render("EDIT SERVICE") + "\n\n")
+	labels := make([]string, len(m.fields))
+	for i, f := range m.fields {
+		labels[i] = f.label
+	}
+	lw := labelWidth(labels) + 1
 	for i, f := range m.fields {
 		style := itemStyle
 		if m.cursor == i {
 			style = selectedStyle
 		}
-		s.WriteString(fmt.Sprintf("  %s %s\n", style.Render(f.label+":"), m.inputs[i].View()))
+		s.WriteString(fmt.Sprintf("  %s %s\n", style.Render(pad(f.label+":", lw)), m.inputs[i].View()))
 	}
 	if m.errMsg != "" {
 		s.WriteString("\n" + errStyle.Render("⚠️  "+m.errMsg) + "\n")

@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/coma-toast/mcp-local/internal/mgr/asttools"
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
 )
@@ -29,6 +30,9 @@ type toolModel struct {
 	input     textinput.Model
 	saved     bool
 	cancelled bool
+	width     int // terminal size from tea.WindowSizeMsg; 0 until reported
+	height    int
+	offset    int // first tool row shown when the list is taller than the terminal
 }
 
 func initialToolModel(cfg *config.ManagerConfig) toolModel {
@@ -56,6 +60,11 @@ func (m toolModel) tools() []config.ToolConfig {
 }
 
 func (m toolModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if size, ok := msg.(tea.WindowSizeMsg); ok {
+		m.width, m.height = size.Width, size.Height
+		m.input.Width = m.descInputWidth()
+		return m, nil
+	}
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
 		if m.state == descEditState {
@@ -102,7 +111,7 @@ func (m *toolModel) updateServices(key tea.KeyMsg) {
 		}
 	case "enter":
 		if m.cursor < len(m.services) {
-			m.svcIdx, m.state, m.cursor = m.cursor, toolListState, 0
+			m.svcIdx, m.state, m.cursor, m.offset = m.cursor, toolListState, 0, 0
 		}
 	}
 }
@@ -122,10 +131,12 @@ func (m toolModel) updateTools(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.cursor > 0 {
 			m.cursor--
 		}
+		m.offset, _ = visibleWindow(len(tools), m.cursor, m.offset, m.toolRowsHeight())
 	case "down", "j":
 		if m.cursor < len(tools)-1 {
 			m.cursor++
 		}
+		m.offset, _ = visibleWindow(len(tools), m.cursor, m.offset, m.toolRowsHeight())
 	case "left", "h":
 		tool.Enabled = !tool.Enabled
 	case "right", "l":
@@ -141,6 +152,7 @@ func (m toolModel) updateTools(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		tool.Tier = tiers[nextIdx]
 	case "enter":
 		m.toolIdx = m.cursor
+		m.input.Width = m.descInputWidth()
 		m.input.SetValue(tool.Description)
 		m.state = descEditState
 		return m, textinput.Blink
@@ -183,7 +195,7 @@ func (m toolModel) View() string {
 			}
 			s.WriteString(fmt.Sprintf("%s%s\n", cursor, style.Render(svc.Name)))
 		}
-		s.WriteString("\n(↑/↓ navigate, Enter select, " + toolsHelp + ")")
+		s.WriteString("\n" + m.wrap("(↑/↓ navigate, Enter select, "+toolsHelp+")"))
 	case toolListState:
 		if m.svcIdx < 0 || m.svcIdx >= len(m.services) {
 			s.WriteString("No service selected.\n\n(Backspace to return)")
@@ -194,35 +206,94 @@ func (m toolModel) View() string {
 		if len(svc.Tools) == 0 {
 			s.WriteString("No tools defined for this service.\n")
 			s.WriteString("Run: mcp-local tools sync " + svc.Name + "\n")
-			s.WriteString("\n(Backspace to return, " + toolsHelp + ")")
+			s.WriteString("\n" + m.wrap("(Backspace to return, "+toolsHelp+")"))
 			break
 		}
-		s.WriteString(fmt.Sprintf("%-20s %-10s %-15s %s\n", "TOOL", "ENABLED", "TIER", "DESCRIPTION"))
-		s.WriteString(strings.Repeat("-", 60) + "\n")
-		for i, tool := range svc.Tools {
-			cursor, style := "  ", itemStyle
-			if m.cursor == i {
-				cursor, style = "> ", selectedStyle
-			}
-			enabled := "❌"
-			if tool.Enabled {
-				enabled = "✅"
-			}
-			tierLabel := tool.Tier
-			if tierLabel == "" {
-				tierLabel = asttools.EffectiveTierForDisplay(tool.Name, "") + " (builtin)"
-			}
-			s.WriteString(fmt.Sprintf("%s%s %-10s %-15s %s\n",
-				cursor, style.Render(tool.Name), enabled, tierLabel, tool.Description))
-		}
-		s.WriteString("\n(Left/Right: Toggle/Tier, Enter: Edit Desc, Backspace: Back, " + toolsHelp + ")")
-		s.WriteString("\nAfter save: mcp-local tools apply " + svc.Name + " && mcp-local restart " + svc.Name)
+		s.WriteString(m.toolTable(svc.Tools))
+		s.WriteString("\n" + m.wrap("(Left/Right: Toggle/Tier, Enter: Edit Desc, Backspace: Back, "+toolsHelp+")"))
+		s.WriteString("\n" + m.wrap("After save: mcp-local tools apply "+svc.Name+" && mcp-local restart "+svc.Name))
 	case descEditState:
 		s.WriteString("Edit Tool Description:\n\n")
 		s.WriteString(m.input.View() + "\n")
 		s.WriteString("\n(Enter to keep, Esc to discard this edit)")
 	}
 	return borderStyle.Render(s.String())
+}
+
+// wrap word-wraps help text to the box so long hints don't push the border off-screen.
+func (m toolModel) wrap(text string) string {
+	return lipgloss.NewStyle().Width(contentWidth(m.width)).Render(text)
+}
+
+// descInputWidth fits the description input inside the box (minus its "> " prompt).
+func (m toolModel) descInputWidth() int {
+	return contentWidth(m.width) - 3
+}
+
+// toolRowsHeight is how many tool rows fit: the terminal height minus the box
+// chrome, title, headings, scroll markers and the (possibly wrapped) help lines.
+func (m toolModel) toolRowsHeight() int {
+	if m.height <= 0 {
+		return 0 // size unknown: show everything
+	}
+	help := lipgloss.Height(m.wrap("(Left/Right: Toggle/Tier, Enter: Edit Desc, Backspace: Back, "+toolsHelp+")")) +
+		lipgloss.Height(m.wrap("After save: mcp-local tools apply <service-name> && mcp-local restart <service-name>"))
+	if h := m.height - 14 - help; h > 3 {
+		return h
+	}
+	return 3
+}
+
+// tierLabel shows the configured tier, else ast-context-cache's built-in one,
+// else "server default" for tools mcp-local has no built-in tier for.
+func tierLabel(tool config.ToolConfig) string {
+	if tool.Tier != "" {
+		return tool.Tier
+	}
+	if t := asttools.DefaultBuiltinTier(tool.Name); t != "" {
+		return t + " (default)"
+	}
+	return "server default"
+}
+
+// toolTable renders the TOOL/ENABLED/TIER/DESCRIPTION rows, padded before styling
+// so columns line up, descriptions cut to the box width, scrolled to the cursor.
+func (m toolModel) toolTable(tools []config.ToolConfig) string {
+	nameW := len("TOOL")
+	for _, t := range tools {
+		if w := len(t.Name); w > nameW {
+			nameW = w
+		}
+	}
+	if nameW > 32 {
+		nameW = 32
+	}
+	const enabledW, tierW = 7, len("extended (default)")
+	descW := contentWidth(m.width) - 2 - nameW - 1 - enabledW - 1 - tierW - 1
+	var s strings.Builder
+	s.WriteString("  " + pad("TOOL", nameW) + " " + pad("ENABLED", enabledW) + " " + pad("TIER", tierW) + " DESCRIPTION\n")
+	s.WriteString(dimStyle.Render(strings.Repeat("─", contentWidth(m.width))) + "\n")
+	start, end := visibleWindow(len(tools), m.cursor, m.offset, m.toolRowsHeight())
+	if start > 0 {
+		s.WriteString(dimStyle.Render(fmt.Sprintf("  ↑ %d more", start)) + "\n")
+	}
+	for i := start; i < end; i++ {
+		tool := tools[i]
+		cursor, style := "  ", itemStyle
+		if m.cursor == i {
+			cursor, style = "> ", selectedStyle
+		}
+		enabled := offStyle.Render(pad("✗ off", enabledW))
+		if tool.Enabled {
+			enabled = onStyle.Render(pad("✓ on", enabledW))
+		}
+		s.WriteString(cursor + style.Render(pad(truncate(tool.Name, nameW), nameW)) + " " + enabled + " " +
+			pad(truncate(tierLabel(tool), tierW), tierW) + " " + dimStyle.Render(truncate(tool.Description, descW)) + "\n")
+	}
+	if end < len(tools) {
+		s.WriteString(dimStyle.Render(fmt.Sprintf("  ↓ %d more", len(tools)-end)) + "\n")
+	}
+	return s.String()
 }
 
 // RunToolManager saves cfg only when the user presses s; any other exit

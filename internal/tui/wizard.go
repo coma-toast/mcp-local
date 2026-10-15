@@ -305,12 +305,13 @@ func (m model) View() string {
 			title = "Edit Service:"
 		}
 		s.WriteString(title + "\n\n")
+		lw := labelWidth(wizardFields) + 1
 		for i, input := range m.inputs {
-			label := itemStyle.Render(wizardFields[i] + ": ")
+			style := itemStyle
 			if m.focused == i {
-				label = selectedStyle.Render(wizardFields[i] + ": ")
+				style = selectedStyle
 			}
-			s.WriteString(label + " " + input.View() + "\n")
+			s.WriteString(style.Render(pad(wizardFields[i]+":", lw)) + " " + input.View() + "\n")
 		}
 		if m.errMsg != "" {
 			s.WriteString("\n" + errStyle.Render("⚠️  "+m.errMsg) + "\n")
