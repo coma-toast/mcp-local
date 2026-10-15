@@ -22,6 +22,7 @@ When building an advanced AI agent setup, you often end up with a fragmented eco
 - `mcp-local stop --deregister` (default) — removes agent entries when stopping.
 - `mcp-local rebuild <service>` — runs `build_command` and re-registers.
 - `mcp-local status` — bubbletea live table; `mcp-local status --plain` for scripting.
+- `mcp-local doctor [service]` — diagnose stuck services (orphaned ports, degraded health) with [--fix] option.
 - `mcp-local health <service>` — GET `health_url` for service(s).
 - `mcp-local logs` — tail unified logs for all services (Ctrl+C to stop).
 - `mcp-local log <service>` — tail individual service log.
@@ -68,8 +69,12 @@ agents:
 - `mcp-local list` — list configured service names.
 
 ### Monitoring & Debugging
-- `mcp-local open <service>` — open `dashboard_url` in browser.
-- `mcp-local registered [service]` — show which agents each service is registered with.
+- `mcp-local status` — live table with DETAIL column showing issues like orphaned ports, degraded health, port conflicts. States: running, degraded, orphaned, port conflict, stopped.
+- `mcp-local status --plain` — one-shot text output
+- `mcp-local health <service>`
+- `mcp-local log <service>` — tail one log
+- `mcp-local logs` — tail all (Ctrl+C)
+- `mcp-local open <service>` — dashboard_url in browser
 - `mcp-local deregister [service]` — remove entries for stopped services (or force by name).
 
 ### Portable Configuration
@@ -172,7 +177,10 @@ mcp-local rebuild my-server    # Run build_command and re-register
 # Status & Monitoring
 mcp-local status               # Live table (q to quit)
 mcp-local status --plain       # One-shot text output
-mcp-local health               # Health check all services
+mcp-local doctor               # Diagnose all services
+mcp-local doctor my-server     # Diagnose one service
+mcp-local doctor --fix         # Diagnose and auto-fix issues
+mcp-local doctor my-server --fix
 mcp-local health my-server     # Health check one service
 mcp-local logs                 # Tail all logs (Ctrl+C to stop)
 mcp-local log my-server        # Tail one service's log
@@ -229,6 +237,7 @@ mcp-local json tools ast-context-cache   # Preview tools.json overrides
 | `tools` | Per-tool overrides (name, enabled, tier, description) → `tools.json` on start |
 | `path` | Filesystem root path (required when `type: filesystem`) |
 | `installer` | Who writes agent entries: `ast-mcp` (auto-set when `command` is an `ast-mcp` binary; delegates to `ast-mcp install`) or `native` (mcp-local's writers) |
+| `extra_ports` | Additional TCP ports owned by this service (checked for orphans/conflicts) |
 
 ## Documentation
 

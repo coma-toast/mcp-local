@@ -101,3 +101,15 @@ func TestCheckAll_Filter(t *testing.T) {
 		t.Errorf("Name = %q, want svc-a", results[0].Name)
 	}
 }
+
+func TestCheckStatus_States(t *testing.T) {
+	// Test stopped state
+	svc := config.ServiceConfig{
+		Name: "stopped-svc",
+		Port: 99997,
+	}
+	st := CheckStatus(svc)
+	if st.State != config.StateStopped {
+		t.Errorf("state = %s, want stopped", st.State)
+	}
+}

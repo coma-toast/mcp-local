@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -41,6 +42,81 @@ type ServiceConfig struct {
 	// Installer delegates agent registration to the service's own CLI ("ast-mcp"),
 	// or "native" to force mcp-local's writers. Empty = auto-detect from command.
 	Installer string `yaml:"installer,omitempty"`
+	// ExtraPorts are additional ports the service owns (e.g. dashboard, admin).
+	ExtraPorts []int `yaml:"extra_ports,omitempty"`
+}
+
+// StateKind classifies a service's live state for status/doctor output.
+type StateKind string
+
+const (
+	StateRunning  StateKind = "running"
+	StateDegraded StateKind = "degraded"
+	StateOrphaned StateKind = "orphaned"
+	StateConflict StateKind = "port conflict"
+	StateStopped  StateKind = "stopped"
+	StateAdopting StateKind = "adopting"
+)
+
+// PortInfo describes a port the service owns and who is holding it.
+type PortInfo struct {
+	Port    int
+	Running bool
+	PID     int
+	Command string
+	IsSame  bool
+}
+
+// OwnedPorts returns every port this service owns: port, the dashboard port,
+// the health port (when on localhost), and any extra_ports.
+func (s ServiceConfig) OwnedPorts() []int {
+	seen := make(map[int]bool)
+	var ports []int
+	add := func(p int) {
+		if p <= 0 || seen[p] {
+			return
+		}
+		seen[p] = true
+		ports = append(ports, p)
+	}
+	add(s.Port)
+	if p := portFromURL(s.DashboardURL); p > 0 {
+		add(p)
+	}
+	if p := portFromURL(s.HealthURL); p > 0 {
+		add(p)
+	}
+	if p := portFromURL(s.MCPURL); p > 0 {
+		add(p)
+	}
+	for _, p := range s.ExtraPorts {
+		add(p)
+	}
+	return ports
+}
+
+// portFromURL returns the TCP port from a localhost URL, or 0.
+func portFromURL(u string) int {
+	u = strings.TrimSpace(u)
+	if u == "" {
+		return 0
+	}
+	if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+		return 0
+	}
+	u = strings.TrimPrefix(u, "http://")
+	u = strings.TrimPrefix(u, "https://")
+	if idx := strings.Index(u, "/"); idx != -1 {
+		u = u[:idx]
+	}
+	if idx := strings.Index(u, ":"); idx != -1 {
+		u = u[idx+1:]
+	}
+	p, err := strconv.Atoi(u)
+	if err != nil {
+		return 0
+	}
+	return p
 }
 
 const (

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/coma-toast/mcp-local/internal/mgr/agents"
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
 	"github.com/coma-toast/mcp-local/internal/mgr/process"
+	"github.com/coma-toast/mcp-local/internal/mgr/runtime"
 	"github.com/coma-toast/mcp-local/internal/portutil"
 	"github.com/spf13/cobra"
 )
@@ -39,7 +41,15 @@ func stopByPID(name string, pid int, svc config.ServiceConfig, deregister bool, 
 	_ = proc.Signal(syscall.SIGTERM)
 	for i := 0; i < maxStopAttempts; i++ {
 		time.Sleep(stopPollInterval)
-		if svc.Port <= 0 || !portutil.IsRunning(svc.Port) {
+		// Check if any owned port is still running or process is dead
+		stillRunning := false
+		for _, p := range svc.OwnedPorts() {
+			if portutil.IsRunning(p) {
+				stillRunning = true
+				break
+			}
+		}
+		if !runtime.IsPIDAlive(pid) || !stillRunning {
 			_ = process.RemovePID(name)
 			fmt.Printf("  ✅ %s stopped (pid %d)\n", name, pid)
 			if deregister {
@@ -72,33 +82,92 @@ func stopServiceNamed(cfg *config.ManagerConfig, name string, deregister bool) e
 		return err
 	}
 	targets := agents.TargetsFromConfig(*cfg)
-	if pid, err := process.LoadPID(name); err == nil {
+
+	// 1. Check PID file
+	if pid, err := process.LoadPID(name); err == nil && runtime.IsPIDAlive(pid) {
 		stopByPID(name, pid, svc, deregister, targets)
 		return nil
+	} else {
+		_ = process.RemovePID(name)
 	}
-	pid := portutil.FindPID(svc.Port)
-	if pid == 0 {
-		fmt.Printf("  ⏭️  %s: not running\n", name)
-		return nil
+
+	// 2. Check any owned port for same-binary instance
+	for _, p := range svc.OwnedPorts() {
+		if pid := portutil.FindPID(p); pid > 0 {
+			if portutil.IsSameBinary(pid, svc.Command) {
+				fmt.Printf("  ℹ️  Found untracked %s instance on port %d (PID %d). Adopting and stopping...\n", name, p, pid)
+				stopByPID(name, pid, svc, deregister, targets)
+				return nil
+			} else {
+				cmdName := portutil.GetCommandForPID(pid)
+				return fmt.Errorf("port %d held by different process %q (PID %d)", p, cmdName, pid)
+			}
+		}
 	}
-	stopByPID(name, pid, svc, deregister, targets)
+
+	fmt.Printf("  ⏭️  %s: not running\n", name)
 	return nil
+}
+
+func printLastLogLines(logPath string, n int) {
+	f, err := os.Open(logPath)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+	start := 0
+	if len(lines) > n {
+		start = len(lines) - n
+	}
+	fmt.Fprintf(os.Stderr, "  📄 Last %d lines of log (%s):\n", len(lines)-start, logPath)
+	for i := start; i < len(lines); i++ {
+		fmt.Fprintf(os.Stderr, "    %s\n", lines[i])
+	}
 }
 
 func startServices(cfg *config.ManagerConfig, names []string, cmd *cobra.Command) ([]config.ServiceConfig, error) {
 	var started []config.ServiceConfig
 	fmt.Println("🚀 Starting MCP servers...")
+	targets := agents.TargetsFromConfig(*cfg)
+
 	for _, name := range names {
 		svc, err := cfg.ServiceNamed(name)
 		if err != nil {
 			fmt.Printf("  ❌ %v\n", err)
 			continue
 		}
-		if svc.Port > 0 && portutil.IsRunning(svc.Port) {
-			fmt.Printf("  ⏭️  %s: already running on port %d\n", name, svc.Port)
+
+		// Check status using runtime CheckStatus
+		st := runtime.CheckStatus(svc)
+		if st.State == config.StateRunning {
+			fmt.Printf("  ⏭️  %s: already running on port %d (PID %d)\n", name, svc.Port, st.PID)
 			started = append(started, svc)
 			continue
 		}
+
+		if st.State == config.StateOrphaned || st.State == config.StateDegraded {
+			fmt.Printf("  ⚠️  %s: found stuck/orphaned instance (PID %d, state: %s). Stopping before start...\n", name, st.PID, st.State)
+			if st.PID > 0 {
+				stopByPID(name, st.PID, svc, false, targets)
+			} else {
+				// Kill by owned ports
+				for _, p := range svc.OwnedPorts() {
+					if pid := portutil.FindPID(p); pid > 0 && portutil.IsSameBinary(pid, svc.Command) {
+						stopByPID(name, pid, svc, false, targets)
+					}
+				}
+			}
+		} else if st.State == config.StateConflict {
+			fmt.Printf("  ❌ %s: port conflict - %s\n", name, st.Detail)
+			continue
+		}
+
 		if svc.MCPType == "filesystem" {
 			p, err := process.StartEmbedded(svc)
 			if err != nil {
@@ -109,10 +178,14 @@ func startServices(cfg *config.ManagerConfig, names []string, cmd *cobra.Command
 			fmt.Printf("  ✅ %s started (in-process, PID %d)\n", name, p.PID)
 			if svc.Port > 0 && !portutil.WaitForPort(svc.Port, portWait) {
 				fmt.Fprintf(cmd.ErrOrStderr(), "  ⚠️  %s: port %d not listening yet\n", name, svc.Port)
+				if svc.Log != "" {
+					printLastLogLines(svc.Log, 10)
+				}
 			}
 			started = append(started, svc)
 			continue
 		}
+
 		svcForStart := svc
 		if !config.ShouldBuildOnStart(svcForStart) {
 			svcForStart.BuildCmd = ""
@@ -121,14 +194,24 @@ func startServices(cfg *config.ManagerConfig, names []string, cmd *cobra.Command
 		p, err := process.StartService(svcForStart)
 		if err != nil {
 			fmt.Printf("  ❌ %s: %v\n", name, err)
+			if svc.Log != "" {
+				printLastLogLines(svc.Log, 10)
+			}
 			continue
 		}
 		if err := process.SavePID(name, p.PID); err != nil {
 			fmt.Printf("  ⚠️  %s: save pid: %v\n", name, err)
 		}
 		fmt.Printf("  ✅ %s started (PID %d)\n", name, p.PID)
-		if svc.Port > 0 && !portutil.WaitForPort(svc.Port, portWait) {
-			fmt.Fprintf(cmd.ErrOrStderr(), "  ⚠️  %s: port %d not listening yet\n", name, svc.Port)
+
+		// Wait for main port if configured
+		if svc.Port > 0 {
+			if !portutil.WaitForPort(svc.Port, portWait) {
+				fmt.Fprintf(cmd.ErrOrStderr(), "  ⚠️  %s: port %d not listening yet\n", name, svc.Port)
+				if svc.Log != "" {
+					printLastLogLines(svc.Log, 10)
+				}
+			}
 		}
 		started = append(started, svc)
 	}

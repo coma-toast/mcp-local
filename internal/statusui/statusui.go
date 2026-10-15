@@ -11,20 +11,24 @@ import (
 )
 
 var (
-	headerStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
-	runningStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	stoppedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-	dimStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	headerStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
+	runningStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	degradedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	orphanedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("208"))
+	conflictStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	stoppedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	dimStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 )
 
 type tickMsg time.Time
 
 type row struct {
-	name    string
-	running bool
-	pid     int
-	port    int
-	uptime  string
+	name   string
+	state  config.StateKind
+	detail string
+	pid    int
+	port   int
+	uptime string
 }
 
 type model struct {
@@ -63,7 +67,14 @@ func (m model) refresh() tea.Cmd {
 			}
 			svc := m.byName[name]
 			st := runtime.CheckStatus(svc)
-			rows = append(rows, row{name: st.Name, running: st.Running, pid: st.PID, port: st.Port, uptime: st.Uptime})
+			rows = append(rows, row{
+				name:   st.Name,
+				state:  st.State,
+				detail: st.Detail,
+				pid:    st.PID,
+				port:   st.Port,
+				uptime: st.Uptime,
+			})
 		}
 		return rows
 	}
@@ -89,29 +100,41 @@ func (m model) View() string {
 	if m.quitting {
 		return ""
 	}
-	colName, colStatus, colPID, colPort, colUptime := 24, 10, 8, 7, 12
-	header := fmt.Sprintf("%-*s %-*s %-*s %-*s %-*s",
-		colName, "NAME", colStatus, "STATUS", colPID, "PID", colPort, "PORT", colUptime, "UPTIME")
+	colName, colStatus, colPID, colPort, colUptime, colDetail := 22, 14, 7, 6, 10, 40
+	header := fmt.Sprintf("%-*s %-*s %-*s %-*s %-*s %-*s",
+		colName, "NAME", colStatus, "STATUS", colPID, "PID", colPort, "PORT", colUptime, "UPTIME", colDetail, "DETAIL")
 	out := headerStyle.Render(header) + "\n"
 	for _, r := range m.rows {
-		var statusStr string
-		if r.running {
-			statusStr = runningStyle.Render(fmt.Sprintf("%-*s", colStatus, "running"))
-		} else {
-			statusStr = stoppedStyle.Render(fmt.Sprintf("%-*s", colStatus, "stopped"))
+		statusStr := fmt.Sprintf("%-*s", colStatus, string(r.state))
+		switch r.state {
+		case config.StateRunning:
+			statusStr = runningStyle.Render(statusStr)
+		case config.StateDegraded:
+			statusStr = degradedStyle.Render(statusStr)
+		case config.StateOrphaned:
+			statusStr = orphanedStyle.Render(statusStr)
+		case config.StateConflict:
+			statusStr = conflictStyle.Render(statusStr)
+		default:
+			statusStr = stoppedStyle.Render(statusStr)
 		}
+
 		pidStr := dimStyle.Render(fmt.Sprintf("%-*s", colPID, "-"))
 		if r.pid > 0 {
 			pidStr = fmt.Sprintf("%-*d", colPID, r.pid)
 		}
-		out += fmt.Sprintf("%-*s %s %s %-*d %-*s\n",
-			colName, r.name, statusStr, pidStr, colPort, r.port, colUptime, r.uptime)
+		detailStr := dimStyle.Render(r.detail)
+		if r.detail != "" && r.state != config.StateStopped && r.state != config.StateRunning {
+			detailStr = r.detail
+		}
+
+		out += fmt.Sprintf("%-*s %s %s %-*d %-*s %s\n",
+			colName, r.name, statusStr, pidStr, colPort, r.port, colUptime, r.uptime, detailStr)
 	}
 	out += dimStyle.Render("\nPress q to quit")
 	return out
 }
 
-// Run starts the bubbletea status UI.
 func Run(cfg *config.ManagerConfig, filter string) error {
 	m := newModel(cfg, filter)
 	p := tea.NewProgram(m)
@@ -119,7 +142,6 @@ func Run(cfg *config.ManagerConfig, filter string) error {
 	return err
 }
 
-// PrintPlain prints a one-shot table (script-friendly).
 func PrintPlain(cfg *config.ManagerConfig, filter string) {
 	m := newModel(cfg, filter)
 	var rows []row
@@ -128,18 +150,15 @@ func PrintPlain(cfg *config.ManagerConfig, filter string) {
 			rows, _ = msg.([]row)
 		}
 	}
-	colName, colStatus, colPID, colPort := 24, 10, 8, 7
-	fmt.Printf("%-*s %-*s %-*s %-*s\n", colName, "NAME", colStatus, "STATUS", colPID, "PID", colPort, "PORT")
-	fmt.Println("------------------------------------------------------------")
+	colName, colStatus, colPID, colPort := 22, 14, 7, 6
+	fmt.Printf("%-*s %-*s %-*s %-*s %s\n", colName, "NAME", colStatus, "STATUS", colPID, "PID", colPort, "PORT", "DETAIL")
+	fmt.Println("--------------------------------------------------------------------------------")
 	for _, r := range rows {
-		st := "stopped"
-		if r.running {
-			st = "running"
-		}
+		st := string(r.state)
 		pid := "-"
 		if r.pid > 0 {
 			pid = fmt.Sprintf("%d", r.pid)
 		}
-		fmt.Printf("%-*s %-*s %-*s %-*d\n", colName, r.name, colStatus, st, colPID, pid, colPort, r.port)
+		fmt.Printf("%-*s %-*s %-*s %-*d %s\n", colName, r.name, colStatus, st, colPID, pid, colPort, r.port, r.detail)
 	}
 }

@@ -1,9 +1,13 @@
 package portutil
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -111,4 +115,96 @@ func GetUptime(pid int) string {
 		return fmt.Sprintf("%d-%02d:%02d:%02d", days, hours, mins, secs)
 	}
 	return fmt.Sprintf("%02d:%02d:%02d", hours, mins, secs)
+}
+
+// GetCommandForPID returns the executable path of the process with given PID.
+func GetCommandForPID(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	if runtime.GOOS == "darwin" {
+		out, err := exec.Command("ps", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(out))
+	}
+	out, err := exec.Command("ps", "-o", "args=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return ""
+	}
+	fields := strings.Fields(strings.TrimSpace(string(out)))
+	if len(fields) > 0 {
+		return fields[0]
+	}
+	return ""
+}
+
+// IsSameBinary checks if the running process command matches the expected service command/binary.
+func IsSameBinary(pid int, expectedCommand string) bool {
+	if pid <= 0 || expectedCommand == "" {
+		return false
+	}
+	// Get full process command or executable
+	var cmdStr string
+	if runtime.GOOS == "darwin" {
+		out, err := exec.Command("ps", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
+		if err == nil {
+			cmdStr = strings.TrimSpace(string(out))
+		}
+	} else {
+		out, err := exec.Command("ps", "-o", "args=", "-p", strconv.Itoa(pid)).Output()
+		if err == nil {
+			cmdStr = strings.TrimSpace(string(out))
+		}
+	}
+	if cmdStr == "" {
+		// Fallback to comm
+		cmdStr = GetCommandForPID(pid)
+	}
+
+	expectedBase := filepath.Base(expectedCommand)
+	actualBase := filepath.Base(cmdStr)
+	if strings.Contains(cmdStr, expectedCommand) || strings.Contains(expectedCommand, cmdStr) || expectedBase == actualBase {
+		return true
+	}
+	return false
+}
+
+// FetchHealth checks a health URL and returns (healthy, detailMessage).
+func FetchHealth(healthURL string) (bool, string) {
+	if healthURL == "" {
+		return true, ""
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(healthURL)
+	if err != nil {
+		return false, fmt.Sprintf("health check failed: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return false, fmt.Sprintf("health returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	// Try to parse JSON for rich status, embed_error, startup_message, data directory error
+	var m map[string]interface{}
+	if json.Unmarshal(body, &m) == nil {
+		if st, ok := m["status"].(string); ok && st != "ok" && st != "healthy" && st != "" {
+			return false, fmt.Sprintf("status: %s", st)
+		}
+		if errStr, ok := m["embed_error"].(string); ok && errStr != "" {
+			return false, errStr
+		}
+		if startup, ok := m["startup_message"].(string); ok && startup != "" && !strings.Contains(strings.ToLower(startup), "ok") {
+			return false, startup
+		}
+		if dataErr, ok := m["data_directory_error"].(string); ok && dataErr != "" {
+			return false, dataErr
+		}
+		if dataErr, ok := m["error"].(string); ok && dataErr != "" {
+			return false, dataErr
+		}
+	}
+	return true, "healthy"
 }

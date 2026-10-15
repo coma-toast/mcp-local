@@ -35,6 +35,7 @@ import (
 
 func addCommands() {
 	addLifecycle()
+	addDoctor()
 
 	rootCmd.AddCommand(cmdList())
 

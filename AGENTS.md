@@ -138,13 +138,19 @@ mcp-local validate
 ### Diagnostics
 
 ```bash
-mcp-local status                 # live TUI (q to quit)
+mcp-local status                 # live TUI (q to quit) — DETAIL column shows issues
 mcp-local status --plain         # scriptable one-shot
 mcp-local health <service>
 mcp-local log <service>          # tail one log
 mcp-local logs                   # tail all (Ctrl+C)
 mcp-local open <service>         # dashboard_url in browser
+mcp-local doctor                 # diagnose all services (orphaned ports, degraded health, port conflicts, stale PID files, agent registration)
+mcp-local doctor my-server --fix # auto-fix same-binary orphans and stale PIDs
 ```
+
+- **Status states**: `running`, `degraded` (health check failed), `orphaned` (same binary on port, not managed), `port conflict` (different program on port), `stopped`.
+- **Doctor checks**: PID file, owned ports (orphaned/conflict), health_url, deps, stale PID, agent registration, disk space.
+- **Doctor --fix**: stops same-binary orphans, removes stale PID files, restarts degraded services. Refuses to kill different programs.
 
 ## Common agent scenarios
 
