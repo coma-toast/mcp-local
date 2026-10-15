@@ -18,8 +18,15 @@ func ConfigPath() string {
 	return filepath.Join(home, ".config", "opencode", "opencode.json")
 }
 
+// managedKeys are rewritten on register; "enabled" and "timeout" are only defaults, so a
+// user's `"enabled": false` or own timeout survives.
+var managedKeys = []string{"type", "url", "headers", "command", "environment"}
+
+// Agent edits this host's config file.
+func Agent() jsonagent.Agent { return newAgent() }
+
 func newAgent() jsonagent.Agent {
-	return jsonagent.New(ConfigPath(), "mcp", entryToOpenCode)
+	return jsonagent.New(ConfigPath(), "mcp", entryToOpenCode, managedKeys...)
 }
 
 func entryToOpenCode(entry config.AgentEntry) map[string]interface{} {
@@ -30,6 +37,9 @@ func entryToOpenCode(entry config.AgentEntry) map[string]interface{} {
 	if entry.Type == "remote" {
 		obj["url"] = entry.URL
 		obj["timeout"] = 30000
+		if len(entry.Headers) > 0 {
+			obj["headers"] = entry.Headers
+		}
 	} else {
 		obj["command"] = entry.Command
 		if len(entry.Environment) > 0 {

@@ -13,13 +13,23 @@ func ConfigPath() string {
 	return filepath.Join(home, ".cursor", "mcp.json")
 }
 
+// managedKeys are rewritten on register; other keys (e.g. a user's "timeout") are kept.
+var managedKeys = []string{"url", "headers", "command", "args", "env"}
+
+// Agent edits this host's config file.
+func Agent() jsonagent.Agent { return newAgent() }
+
 func newAgent() jsonagent.Agent {
-	return jsonagent.New(ConfigPath(), "mcpServers", entryToCursor)
+	return jsonagent.New(ConfigPath(), "mcpServers", entryToCursor, managedKeys...)
 }
 
 func entryToCursor(entry config.AgentEntry) map[string]interface{} {
 	if entry.Type == "remote" {
-		return map[string]interface{}{"url": entry.URL}
+		obj := map[string]interface{}{"url": entry.URL}
+		if len(entry.Headers) > 0 {
+			obj["headers"] = entry.Headers
+		}
+		return obj
 	}
 	obj := map[string]interface{}{
 		"command": entry.Command[0],

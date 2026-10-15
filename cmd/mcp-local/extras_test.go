@@ -64,13 +64,3 @@ func TestIsRegisteredInFile_JSONC(t *testing.T) {
 		t.Error("JSONC config not parsed")
 	}
 }
-
-func TestBridgeURL(t *testing.T) {
-	entry := map[string]interface{}{"command": "/usr/local/bin/mcp-local", "args": []interface{}{"bridge", "http://x/mcp"}}
-	if url, ok := bridgeURL(entry); !ok || url != "http://x/mcp" {
-		t.Errorf("bridgeURL = %q, %v", url, ok)
-	}
-	if _, ok := bridgeURL(map[string]interface{}{"command": "npx", "args": []interface{}{"bridge", "x"}}); ok {
-		t.Error("non-mcp-local command matched")
-	}
-}

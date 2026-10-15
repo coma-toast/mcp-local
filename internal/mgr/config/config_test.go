@@ -145,7 +145,7 @@ func TestLoadSaveConfig(t *testing.T) {
 
 	orig := &ManagerConfig{
 		Services: []ServiceConfig{{Name: "test", Port: 8080}},
-		Agents:   AgentsConfig{OpenCode: true, Cursor: true},
+		Agents:   &AgentsConfig{OpenCode: true, Cursor: true},
 	}
 	if err := SaveConfig(orig); err != nil {
 		t.Fatalf("SaveConfig: %v", err)
@@ -183,15 +183,13 @@ func TestEffectiveInstaller(t *testing.T) {
 	}
 }
 
-func TestExpandServiceAutoSetsInstaller(t *testing.T) {
-	s := ServiceConfig{Command: "~/bin/ast-mcp"}
+func TestExpandServiceDoesNotPinInstaller(t *testing.T) {
+	s := ServiceConfig{Name: "ast-context-cache", Command: "~/bin/ast-mcp"}
 	ExpandService(&s)
-	if s.Installer != InstallerASTMCP {
-		t.Errorf("Installer = %q, want ast-mcp", s.Installer)
+	if s.Installer != "" {
+		t.Errorf("Installer = %q; auto-detection must not be written into the config", s.Installer)
 	}
-	n := ServiceConfig{Command: "~/bin/ast-mcp", Installer: InstallerNative}
-	ExpandService(&n)
-	if n.Installer != InstallerNative {
-		t.Errorf("explicit native overwritten: %q", n.Installer)
+	if s.EffectiveInstaller() != InstallerASTMCP {
+		t.Errorf("EffectiveInstaller = %q, want ast-mcp", s.EffectiveInstaller())
 	}
 }

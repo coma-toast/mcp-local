@@ -24,10 +24,14 @@ import (
 
 const MinASTMCPMajor = 4
 
+// ASTServiceName is the entry name `ast-mcp install` writes, so only a service with this name
+// can be delegated to it.
+const ASTServiceName = "ast-context-cache"
+
 var (
 	installerTimeout = 60 * time.Second
 	versionTimeout   = 10 * time.Second
-	semverRe         = regexp.MustCompile(`v?(\d+)\.(\d+)\.(\d+)`)
+	semverRe         = regexp.MustCompile(`(?m)^ast-mcp v?(\d+)\.(\d+)\.(\d+)`)
 )
 
 // astTargets maps mcp-local host names to ast-mcp install targets.
@@ -61,16 +65,24 @@ type installResult struct {
 // installers caches `--version` checks per command for one register/deregister pass.
 type installers struct {
 	versions map[string]error
+	warned   map[string]bool
 }
 
 func newInstallers() *installers {
-	return &installers{versions: map[string]error{}}
+	return &installers{versions: map[string]error{}, warned: map[string]bool{}}
 }
 
 // delegate runs the service's installer for host when the service has one and it is usable.
 // handled=false means the caller must use mcp-local's native writer.
 func (in *installers) delegate(s config.ServiceConfig, host, verb string) (handled, found bool, err error) {
 	if s.EffectiveInstaller() != config.InstallerASTMCP {
+		return false, false, nil
+	}
+	if s.Name != ASTServiceName {
+		if !in.warned[s.Name] {
+			in.warned[s.Name] = true
+			fmt.Fprintf(Warn, "  ⚠️  %s: ast-mcp install only writes an entry named %s; using mcp-local's writers for %s\n", s.Name, ASTServiceName, s.Name)
+		}
 		return false, false, nil
 	}
 	target, ok := astTargets[host]
@@ -155,7 +167,7 @@ func (in *installers) checkVersion(cmd string) error {
 func checkVersion(cmd string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), versionTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, cmd, "--version").CombinedOutput()
+	out, err := exec.CommandContext(ctx, cmd, "--version").Output()
 	if err != nil {
 		return fmt.Errorf("%s --version failed: %v", cmd, err)
 	}

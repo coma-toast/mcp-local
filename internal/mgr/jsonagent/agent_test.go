@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
+	"github.com/coma-toast/mcp-local/internal/mgr/safefile"
 )
 
 func TestMain(m *testing.M) {
@@ -309,10 +310,10 @@ func TestBackupRetention(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mcp.json")
 	writeFile(t, path, `{}`, 0o644)
 	base := time.Date(2026, 1, 2, 3, 4, 0, 0, time.Local)
-	defer func() { now = time.Now }()
+	defer func() { safefile.Now = time.Now }()
 	a := New(path, "mcpServers", nil)
 	for i := 0; i < MaxBackups+3; i++ {
-		now = func() time.Time { return base.Add(time.Duration(i) * time.Second) }
+		safefile.Now = func() time.Time { return base.Add(time.Duration(i) * time.Second) }
 		if err := a.RegisterRemote("svc", fmt.Sprintf("http://x/%d", i), nil); err != nil {
 			t.Fatal(err)
 		}
@@ -385,5 +386,104 @@ func TestParseErrorLeavesFileUntouched(t *testing.T) {
 	}
 	if got := readFile(t, path); got != `{"mcpServers": {` {
 		t.Errorf("file modified: %q", got)
+	}
+}
+
+func cursorLike(e config.AgentEntry) map[string]interface{} {
+	if e.Type == "remote" {
+		return map[string]interface{}{"url": e.URL}
+	}
+	return map[string]interface{}{"command": e.Command[0], "args": e.Command[1:]}
+}
+
+func TestSet_MergeKeepsUserKeysAndDropsStaleManaged(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp.json")
+	writeFile(t, path, "{\n  \"mcpServers\": {\n    \"svc\": {\n      \"command\": \"old\",\n      \"args\": [\"a\"],\n      \"timeout\": 5,\n      \"disabled\": true\n    }\n  }\n}\n", 0o644)
+	a := New(path, "mcpServers", cursorLike, "url", "command", "args")
+	if err := a.RegisterServices([]config.ServiceConfig{{Name: "svc", MCPURL: "http://x/mcp"}}); err != nil {
+		t.Fatal(err)
+	}
+	e := block(t, path, "mcpServers")["svc"].(map[string]interface{})
+	if e["url"] != "http://x/mcp" || e["timeout"] != float64(5) || e["disabled"] != true {
+		t.Errorf("entry = %v", e)
+	}
+	if _, ok := e["command"]; ok {
+		t.Errorf("stale managed key kept: %v", e)
+	}
+	if _, ok := e["args"]; ok {
+		t.Errorf("stale managed key kept: %v", e)
+	}
+}
+
+func TestSet_DefaultsDoNotOverrideUser(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "opencode.json")
+	writeFile(t, path, `{"mcp": {"svc": {"type": "remote", "url": "http://old", "enabled": false, "timeout": 5}}}`, 0o644)
+	conv := func(e config.AgentEntry) map[string]interface{} {
+		return map[string]interface{}{"type": "remote", "url": e.URL, "enabled": true, "timeout": 30000}
+	}
+	if err := New(path, "mcp", conv, "type", "url").RegisterServices([]config.ServiceConfig{{Name: "svc", MCPURL: "http://new"}}); err != nil {
+		t.Fatal(err)
+	}
+	got := readFile(t, path)
+	if got != `{"mcp": {"svc": {"type": "remote", "url": "http://new", "enabled": false, "timeout": 5}}}` {
+		t.Errorf("got %s", got)
+	}
+}
+
+func TestSet_DuplicateKeysRejected(t *testing.T) {
+	for name, content := range map[string]string{
+		"block": `{"mcpServers": {}, "mcpServers": {"svc": {"url": "http://a"}}}`,
+		"entry": `{"mcpServers": {"svc": {"url": "http://a"}, "svc": {"url": "http://b"}}}`,
+		"key":   `{"mcpServers": {"svc": {"url": "http://a", "url": "http://b"}}}`,
+	} {
+		path := filepath.Join(t.TempDir(), "mcp.json")
+		writeFile(t, path, content, 0o644)
+		err := New(path, "mcpServers", remoteConverter, "url").RegisterServices([]config.ServiceConfig{{Name: "svc", MCPURL: "http://c"}})
+		if err == nil || !strings.Contains(err.Error(), "duplicate key") {
+			t.Errorf("%s: err = %v", name, err)
+		}
+		if readFile(t, path) != content {
+			t.Errorf("%s: file modified", name)
+		}
+	}
+}
+
+func TestEdit_PreservesBOMAndCRLF(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp.json")
+	orig := "\xef\xbb\xbf{\r\n  \"mcpServers\": {\r\n    \"keep\": {\"url\": \"http://k\"}\r\n  }\r\n}\r\n"
+	writeFile(t, path, orig, 0o644)
+	if err := New(path, "mcpServers", remoteConverter).RegisterServices([]config.ServiceConfig{{Name: "svc", MCPURL: "http://x"}}); err != nil {
+		t.Fatal(err)
+	}
+	got := readFile(t, path)
+	if !strings.HasPrefix(got, "\xef\xbb\xbf{\r\n") {
+		t.Errorf("BOM lost: %q", got)
+	}
+	if strings.Count(got, "\n") != strings.Count(got, "\r\n") {
+		t.Errorf("bare LF inserted: %q", got)
+	}
+	if block(t, path, "mcpServers")["svc"] == nil {
+		t.Error("entry not written")
+	}
+}
+
+func TestLedger_RecordsWrittenAndRemovedNames(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp.json")
+	writeFile(t, path, `{"mcpServers": {"user": {"url": "http://u"}}}`, 0o644)
+	a := New(path, "mcpServers", remoteConverter)
+	if a.Owns("user") || !a.Has("user") {
+		t.Fatal("a pre-existing entry is not mcp-local's")
+	}
+	if err := a.RegisterServices([]config.ServiceConfig{{Name: "svc", MCPURL: "http://x"}}); err != nil {
+		t.Fatal(err)
+	}
+	if !a.Owns("svc") {
+		t.Error("written entry not recorded")
+	}
+	if _, err := a.Deregister("svc"); err != nil {
+		t.Fatal(err)
+	}
+	if a.Owns("svc") {
+		t.Error("removed entry still recorded")
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/coma-toast/mcp-local/internal/mgr/claudedesktop"
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
 	"github.com/coma-toast/mcp-local/internal/mgr/cursor"
+	"github.com/coma-toast/mcp-local/internal/mgr/jsonagent"
 	"github.com/coma-toast/mcp-local/internal/mgr/opencode"
 )
 
@@ -31,15 +32,13 @@ func DefaultTargets() Targets {
 	return Targets{OpenCode: true, Cursor: true, Claude: true}
 }
 
+// TargetsFromConfig is the `agents:` block as written (all false = no hosts); without an
+// `agents:` key every host is enabled (legacy behavior).
 func TargetsFromConfig(cfg config.ManagerConfig) Targets {
-	if cfg.Agents.OpenCode || cfg.Agents.Cursor || cfg.Agents.Claude {
-		return Targets{
-			OpenCode: cfg.Agents.OpenCode,
-			Cursor:   cfg.Agents.Cursor,
-			Claude:   cfg.Agents.Claude,
-		}
+	if cfg.Agents == nil {
+		return DefaultTargets()
 	}
-	return DefaultTargets()
+	return Targets{OpenCode: cfg.Agents.OpenCode, Cursor: cfg.Agents.Cursor, Claude: cfg.Agents.Claude}
 }
 
 // Hosts lists the enabled host names in a stable order.
@@ -84,51 +83,76 @@ func RegisterAll(services []config.ServiceConfig, targets Targets) error {
 	return errors.Join(errs...)
 }
 
-// DeregisterAll removes svc from every enabled host, continuing past per-host errors.
+// DeregisterAll removes svc from every enabled host (the service is named explicitly, so
+// entries mcp-local didn't write are removed too), continuing past per-host errors.
 func DeregisterAll(svc config.ServiceConfig, targets Targets) error {
 	inst := newInstallers()
 	var errs []error
 	for _, host := range targets.Hosts() {
-		if _, err := inst.deregister(svc, host); err != nil {
+		if _, err := inst.deregister(svc, host, true); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", host, err))
 		}
 	}
 	return errors.Join(errs...)
 }
 
-// Deregister removes svc from one host; found reports whether an entry was removed.
-func Deregister(svc config.ServiceConfig, host string) (bool, error) {
-	return newInstallers().deregister(svc, host)
+// Removal is what Deregister did on one host.
+type Removal int
+
+const (
+	NotFound Removal = iota // no entry
+	Removed                 // entry removed
+	NotOwned                // entry left alone: mcp-local didn't write it
+)
+
+// Deregister removes svc from one host. Unless explicit, an entry that mcp-local's own writer
+// didn't record writing is left in place (NotOwned), since it may be the user's.
+func Deregister(svc config.ServiceConfig, host string, explicit bool) (Removal, error) {
+	return newInstallers().deregister(svc, host, explicit)
 }
 
-func (in *installers) deregister(svc config.ServiceConfig, host string) (bool, error) {
+func (in *installers) deregister(svc config.ServiceConfig, host string, explicit bool) (Removal, error) {
 	handled, found, err := in.delegate(svc, host, "uninstall")
 	if err != nil || handled {
-		return found, err
+		return removal(found), err
 	}
-	return deregisterNative(host, svc.Name)
+	a, err := hostAgent(host)
+	if err != nil {
+		return NotFound, err
+	}
+	if !explicit && !a.Owns(svc.Name) {
+		if a.Has(svc.Name) {
+			return NotOwned, nil
+		}
+		return NotFound, nil
+	}
+	found, err = a.Deregister(svc.Name)
+	return removal(found), err
+}
+
+func removal(found bool) Removal {
+	if found {
+		return Removed
+	}
+	return NotFound
+}
+
+func hostAgent(host string) (jsonagent.Agent, error) {
+	switch host {
+	case HostOpenCode:
+		return opencode.Agent(), nil
+	case HostCursor:
+		return cursor.Agent(), nil
+	case HostClaude:
+		return claudedesktop.Agent(), nil
+	}
+	return jsonagent.Agent{}, fmt.Errorf("unknown agent host %q", host)
 }
 
 func registerNative(host string, services []config.ServiceConfig) error {
-	switch host {
-	case HostOpenCode:
-		return opencode.RegisterServices(services)
-	case HostCursor:
-		return cursor.RegisterServices(services)
-	case HostClaude:
-		return claudedesktop.RegisterServices(services)
+	a, err := hostAgent(host)
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("unknown agent host %q", host)
-}
-
-func deregisterNative(host, name string) (bool, error) {
-	switch host {
-	case HostOpenCode:
-		return opencode.Deregister(name)
-	case HostCursor:
-		return cursor.Deregister(name)
-	case HostClaude:
-		return claudedesktop.Deregister(name)
-	}
-	return false, fmt.Errorf("unknown agent host %q", host)
+	return a.RegisterServices(services)
 }
