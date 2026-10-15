@@ -21,12 +21,13 @@ When building an advanced AI agent setup, you often end up with a fragmented eco
 - `mcp-local stop <service>` / `stop --all`, `restart <service>` / `restart --all`.
 - `mcp-local stop --deregister` (default) — removes agent entries when stopping.
 - `mcp-local rebuild <service>` — runs `build_command` and re-registers.
-- `mcp-local status` — bubbletea live table; `mcp-local status --plain` for scripting.
-- `mcp-local doctor [service]` — diagnose stuck services (orphaned ports, degraded health) with [--fix] option.
+- `mcp-local status` — bubbletea live table with a DETAIL column (running, degraded, orphaned, port conflict, stale, stopped); `mcp-local status --plain` for scripting.
+- `mcp-local doctor [service] [--fix]` — diagnose untracked copies holding a service's ports, other programs on them, failing health, stale PID files, missing deps or registrations, and low disk space. Read-only unless `--fix`, which only stops copies of the service's own binary, removes stale PID files, restarts degraded services and re-registers; exits non-zero while problems remain. `start` also replaces an untracked copy of the service's binary and refuses to start when another program holds one of its ports.
 - `mcp-local health <service>` — GET `health_url` for service(s).
 - `mcp-local logs` — tail unified logs for all services (Ctrl+C to stop).
-- `mcp-local log <service>` — tail individual service log.
-- stdio services detected via PID file (not just port).
+- `mcp-local log <service>` — tail individual service log. Both tails start at the end of the file, wait for a missing log to appear, and follow truncation and rotation.
+- stdio services are registered only: each agent launches its own copy, so `start` never daemonizes them (`status` shows `on-demand`).
+- `stop` stops the whole process group, verifies the process by PID + start time before signalling, and fails unless the port ends up free. `start`/`stop`/`restart`/`health` exit non-zero on any failure; `restart` builds before stopping.
 - Supports **remote-only** services (no local binary, just `mcp_url`).
 - Supports **filesystem** embedded MCP server (`type: filesystem`).
 
@@ -36,9 +37,9 @@ On `start` / `restart` / `register`, services are registered with enabled agents
 - **Cursor**: `~/.cursor/mcp.json` — HTTP as `{ "url": "..." }`, stdio as `{ "command": "...", "args": [...], "env": {...} }`.
 - **Claude Desktop**: `claude_desktop_config.json` — stdio as `{ "type": "stdio", "command": "...", "args": [...], "env": {...} }`. Claude Desktop only launches stdio servers, so HTTP services are written as a bridge entry: `{ "command": "/abs/path/mcp-local", "args": ["bridge", "<mcp_url>"] }`.
 
-Only mcp-local's own entries are touched: files are edited as JSONC (comments, trailing commas, key order, and formatting survive), written atomically, and the original is backed up to `~/.mcp-local/backups/<YYYYMMDD-HHMMSS>/` (last 5 per file). A failure on one agent does not stop the others; all errors are reported together.
+Only mcp-local's own entries are touched: files are edited as JSONC (comments, trailing commas, key order, formatting, a UTF-8 BOM and CRLF line endings survive), written atomically, and the original is backed up to `~/.mcp-local/backups/<YYYYMMDD-HHMMSS>/` (last 5 per file). Within an entry only the keys mcp-local manages are rewritten (`url`, `headers`, `command`, `args`, `env`/`environment`, `type`); your own keys such as OpenCode `enabled`/`timeout`, Claude Desktop `disabled` or Cursor `timeout` are kept. A file with a duplicated key is refused rather than edited. Names mcp-local writes are recorded in `~/.mcp-local/written-entries.json`. A failure on one agent does not stop the others; all errors are reported together and the command exits non-zero.
 
-**ast-context-cache:** services whose `command` is an `ast-mcp` binary are registered by delegating to `ast-mcp install|uninstall --target <opencode|cursor|claude_desktop> --component mcp --yes --json --mcp-url <mcp_url>` (ast-mcp 4.0.0+). Older ast-mcp versions fall back to mcp-local's writers with a warning. Set `installer: native` on the service to always use mcp-local's writers.
+**ast-context-cache:** a service named `ast-context-cache` whose `command` is an `ast-mcp` binary is registered by delegating to `ast-mcp install|uninstall --target <opencode|cursor|claude_desktop> --component mcp --yes --json --mcp-url <mcp_url>` (ast-mcp 4.0.0+). Older ast-mcp versions fall back to mcp-local's writers with a warning. Set `installer: native` on the service to always use mcp-local's writers. Other service names use mcp-local's writers (with a warning), since `ast-mcp install` always names its entry `ast-context-cache`.
 
 ```yaml
 agents:
@@ -47,35 +48,34 @@ agents:
   claude: true
 ```
 
+With no `agents:` key every host is enabled; with the key present, hosts set to `false` (or left out) are skipped, so all `false` means none.
+
 ### stdio ↔ HTTP Bridge
 - `mcp-local bridge <url>` — relays newline-delimited JSON-RPC on stdin/stdout to a Streamable HTTP MCP server (spec 2025-06-18): session id and protocol version headers, JSON and SSE responses, the server's GET notification stream, JSON-RPC errors for failed HTTP requests, session DELETE on stdin EOF. Logs go to stderr.
-- Flags: `--header key=value` (repeatable), `--timeout` per request (default `60s`).
+- When the server forgets the session (HTTP 404, e.g. after `mcp-local restart`), the bridge replays the client's `initialize` and retries, so Claude Desktop keeps working. The GET stream reconnects with backoff and `Last-Event-ID`. On stdin EOF, in-flight calls get 2s, then are cancelled.
+- Flags: `--header key=value` (repeatable), `--timeout` (default `60s`): max wait for response headers, and max silence on a call's response stream. A long tool call that keeps streaming is not cut off. On timeout the server gets `notifications/cancelled`.
 
 ### Tool & Tier Management (ast-context-cache)
-- `mcp-local tools sync <service>` — fetch tool list from a running MCP server via `tools/list`.
-- `mcp-local tools` — TUI to enable/disable tools, change tiers, edit descriptions.
-- `mcp-local tools apply <service>` — write overrides to `~/.astcache/tools.json` (or `tools_config_path`).
+- `mcp-local tools sync <service>` — fetch tool list from a running MCP server via `tools/list` (the server's descriptions are not stored as overrides).
+- `mcp-local tools` — TUI to enable/disable tools, change tiers, edit descriptions. Press `s` to save; `q`, Esc or Ctrl+C quit without saving.
+- `mcp-local tools apply <service>` — merge overrides into `~/.astcache/tools.json` (or `tools_config_path`); entries for tools the config doesn't override (e.g. set in the ast dashboard) are kept, and the file is backed up and written atomically.
 - `mcp-local json tools <service>` — print the tools.json overrides that would be written.
 - On start: `AST_MCP_TIER`, optional `AST_MCP_CODE_MODE`, and `AST_MCP_TOOLS_CONFIG` when tools are configured.
 - **Restart** the service after changing tool settings (ast-mcp reads `tools.json` at startup only).
 
 ### Configuration Management
 - `mcp-local add <name>` — add or update a service (interactive prompts for new services).
-- `mcp-local edit <service>` — TUI editor for service configuration.
-- `mcp-local remove <service>` — remove from config and deregister from agents.
+- `mcp-local edit <service>` — TUI editor for service configuration (↑/↓/Tab move between fields, Enter saves, Esc cancels).
+- `mcp-local remove <service>` — deregister from agents, then remove from config (kept in config if any agent fails).
 - `mcp-local config` — open `~/.mcp-local/config.yaml` in `$EDITOR`.
 - `mcp-local validate` — validate configuration for common issues (missing binaries, deps, ports).
 - `mcp-local import` — import MCP configs from OpenCode, Cursor, or Claude Desktop.
 - `mcp-local list` — list configured service names.
 
 ### Monitoring & Debugging
-- `mcp-local status` — live table with DETAIL column showing issues like orphaned ports, degraded health, port conflicts. States: running, degraded, orphaned, port conflict, stopped.
-- `mcp-local status --plain` — one-shot text output
-- `mcp-local health <service>`
-- `mcp-local log <service>` — tail one log
-- `mcp-local logs` — tail all (Ctrl+C)
-- `mcp-local open <service>` — dashboard_url in browser
-- `mcp-local deregister [service]` — remove entries for stopped services (or force by name).
+- `mcp-local open <service>` — open `dashboard_url` in browser.
+- `mcp-local registered [service]` — show which agents each service is registered with.
+- `mcp-local deregister [service]` — remove entries mcp-local wrote for stopped HTTP services with a port (or force by name).
 
 ### Portable Configuration
 All settings in `~/.mcp-local/config.yaml`. Sync across machines via Dropbox, iCloud, or Git.
@@ -89,7 +89,7 @@ All settings in `~/.mcp-local/config.yaml`. Sync across machines via Dropbox, iC
 ## Supported MCP Servers
 While it can manage *any* binary, it is optimized for:
 - **ast-context-cache**: Full lifecycle, tool tier env injection, and TUI management.
-- **model-proxy**: stdio process management and registration.
+- **model-proxy**: stdio registration (agents launch it on demand).
 - **Custom Servers**: Add any binary to `config.yaml`.
 
 ## Getting Started
@@ -111,11 +111,10 @@ git clone https://github.com/coma-toast/mcp-local.git
 cd mcp-local
 make          # writes ./bin/mcp-local
 make test     # run unit tests
-# Optional: install system-wide
-# sudo make install
+make install INSTALL_DIR=~/.local/bin   # or: make install PREFIX=~/.local
 ```
 
-Add `./bin` to your PATH.
+`make install` copies `bin/mcp-local` to `$(INSTALL_DIR)` (default `$(PREFIX)/bin`, `PREFIX ?= /usr/local`) and creates the directory if needed. Where `/usr/local/bin` isn't writable, use `INSTALL_DIR=~/.local/bin` (or `PREFIX=~/.local`) as above; otherwise run `sudo make install`. You can also skip installing and add `./bin` to your PATH.
 
 ### Configuration
 Create `~/.mcp-local/config.yaml` or copy the starter:
@@ -221,10 +220,11 @@ mcp-local json tools ast-context-cache   # Preview tools.json overrides
 | `args` | Command-line arguments |
 | `port` | TCP listen port (omit for stdio) |
 | `type` | `http`, `stdio`, or `filesystem` |
-| `mcp_url` | MCP endpoint URL for remote registration |
+| `mcp_url` | MCP endpoint URL for remote registration (a service with only `mcp_url` is HTTP) |
+| `headers` | HTTP headers for an HTTP service (Cursor/OpenCode `headers`, Claude Desktop `bridge --header`) |
 | `health_url` | HTTP health check endpoint |
 | `dashboard_url` | Web dashboard URL |
-| `log` | Log file path |
+| `log` | Log file path (default `~/.mcp-local/logs/<name>.log`) |
 | `env` | Environment variables (key-value map) |
 | `build_command` | Shell command to build the service |
 | `no_build_on_start` | Skip build on `start` (default: false, i.e. build runs) |
@@ -234,10 +234,10 @@ mcp-local json tools ast-context-cache   # Preview tools.json overrides
 | `code_mode` | Injected as `AST_MCP_CODE_MODE=true` when true |
 | `no_code_mode` | Injected as `AST_MCP_CODE_MODE=false` when true |
 | `tools_config_path` | Path to tools overrides JSON (default `~/.astcache/tools.json`) |
-| `tools` | Per-tool overrides (name, enabled, tier, description) → `tools.json` on start |
+| `tools` | Per-tool overrides (name, enabled, tier, description; a missing `enabled` means enabled) → `tools.json` on start |
 | `path` | Filesystem root path (required when `type: filesystem`) |
-| `installer` | Who writes agent entries: `ast-mcp` (auto-set when `command` is an `ast-mcp` binary; delegates to `ast-mcp install`) or `native` (mcp-local's writers) |
-| `extra_ports` | Additional TCP ports owned by this service (checked for orphans/conflicts) |
+| `installer` | Who writes agent entries: `ast-mcp` (the default when `command` is an `ast-mcp` binary; delegates to `ast-mcp install`) or `native` (mcp-local's writers) |
+| `extra_ports` | Additional local TCP ports the service owns (e.g. an admin port), checked for orphans and conflicts alongside `port` and the localhost ports in `dashboard_url`/`health_url`/`mcp_url` |
 
 ## Documentation
 
@@ -252,16 +252,14 @@ mcp-local json tools ast-context-cache   # Preview tools.json overrides
 ```bash
 make        # build
 make test   # run tests
-make check  # test + vet; fails on unformatted code without rewriting
+make check  # test + vet + gofmt -l (fails on unformatted code, rewrites nothing)
 make fmt    # fix formatting with gofmt -w .
+make install INSTALL_DIR=~/.local/bin   # see Installation for PREFIX / sudo
 ```
 
-Install the binary with a custom `INSTALL_DIR`:
+The Makefile exports `GOWORK=off`, so a `go.work` in a parent directory (e.g. `~/git/go.work`) can't break the build.
 
-```bash
-make install      # installs to /usr/local/bin (default)
-make install INSTALL_DIR=$(mktemp -d)  # installs to a temp directory
-```
+CI runs `gofmt -l`, `go vet`, `go test -race`, staticcheck and `go build` on push and PR.
 
 ## License
 

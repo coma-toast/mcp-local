@@ -1,6 +1,6 @@
 # stdio service example — append to ~/.mcp-local/config.yaml
 # This shows a model-proxy-style stdio MCP server.
-# stdio services have no port; status detects them via PID file.
+# stdio services have no port and are registered only; agents launch them on demand.
 - name: model-proxy
   command: ${HOME}/git/model-proxy/bin/model-proxy
   type: stdio

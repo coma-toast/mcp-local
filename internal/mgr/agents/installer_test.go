@@ -17,7 +17,8 @@ import (
 const fakeASTMCP = `#!/bin/sh
 echo "$*" >> "$FAKE_AST_LOG"
 if [ "$1" = "--version" ]; then
-  echo "ast-mcp version ${FAKE_AST_VERSION:-v4.0.0} (abc123)"
+  echo "note: 9.9.9 is available" >&2
+  echo "ast-mcp ${FAKE_AST_VERSION:-v4.0.0}"
   exit 0
 fi
 echo '{"changes":[{"path":"/tmp/x.json","kind":"'"$1"'","diff":"","skipped":false,"reason":"conflict here"}],"status":[],"warnings":["heads up"]}'
@@ -87,9 +88,9 @@ func TestRegisterAll_DelegatesToASTMCP(t *testing.T) {
 
 func TestDeregister_DelegatesUninstall(t *testing.T) {
 	svc, log := setup(t, "4.2.1", "0")
-	found, err := Deregister(svc, HostClaude)
-	if err != nil || !found {
-		t.Fatalf("Deregister = %v, %v", found, err)
+	res, err := Deregister(svc, HostClaude, false)
+	if err != nil || res != Removed {
+		t.Fatalf("Deregister = %v, %v", res, err)
 	}
 	got := logLines(t, log)
 	if got[len(got)-1] != "uninstall --target claude_desktop --component mcp --yes --json --mcp-url http://localhost:7821/mcp" {
@@ -172,8 +173,12 @@ func TestParseVersion(t *testing.T) {
 		ok    bool
 	}{
 		{"ast-mcp v4.0.0", 4, true},
-		{"3.0.40\n", 3, true},
+		{"ast-mcp 4.0.1\n", 4, true},
 		{"ast-mcp 10.1.2-rc1 (deadbeef)", 10, true},
+		{"starting\nast-mcp 4.2.0\n", 4, true},
+		{"3.0.40\n", 0, false},
+		{"ast-mcp-helper 9.0.0", 0, false},
+		{"update to 9.9.9: ast-mcp", 0, false},
 		{"dev", 0, false},
 	}
 	for _, tt := range tests {
@@ -181,5 +186,48 @@ func TestParseVersion(t *testing.T) {
 		if major != tt.major || ok != tt.ok {
 			t.Errorf("parseVersion(%q) = %d, %v", tt.in, major, ok)
 		}
+	}
+}
+
+func TestRegisterAll_DelegatesOnlyForASTContextCache(t *testing.T) {
+	svc, log := setup(t, "4.0.0", "0")
+	svc.Name = "ast"
+	if err := RegisterAll([]config.ServiceConfig{svc}, DefaultTargets()); err != nil {
+		t.Fatalf("RegisterAll: %v", err)
+	}
+	if _, err := os.Stat(log); !os.IsNotExist(err) {
+		t.Errorf("ast-mcp must not run for a service not named %s: %v", ASTServiceName, logLines(t, log))
+	}
+	if !registeredIn(cursor.ConfigPath(), "mcpServers", "ast") {
+		t.Error("native writer should register the service")
+	}
+	if w := Warn.(*bytes.Buffer).String(); strings.Count(w, "only writes an entry named") != 1 {
+		t.Errorf("want one warning, got %q", w)
+	}
+}
+
+func TestDeregister_SkipsEntriesMCPLocalDidNotWrite(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(cursor.ConfigPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cursor.ConfigPath(), []byte(`{"mcpServers": {"svc": {"url": "http://mine"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	svc := config.ServiceConfig{Name: "svc", MCPURL: "http://localhost:9/mcp"}
+	if res, err := Deregister(svc, HostCursor, false); err != nil || res != NotOwned {
+		t.Fatalf("Deregister = %v, %v; want NotOwned", res, err)
+	}
+	if !registeredIn(cursor.ConfigPath(), "mcpServers", "svc") {
+		t.Fatal("user's entry removed")
+	}
+	if res, err := Deregister(svc, HostCursor, true); err != nil || res != Removed {
+		t.Fatalf("explicit Deregister = %v, %v", res, err)
+	}
+	if err := RegisterAll([]config.ServiceConfig{svc}, Targets{Cursor: true}); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := Deregister(svc, HostCursor, false); err != nil || res != Removed {
+		t.Fatalf("Deregister of an entry mcp-local wrote = %v, %v", res, err)
 	}
 }

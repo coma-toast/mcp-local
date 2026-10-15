@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -18,12 +17,21 @@ func IsRunning(port int) bool {
 	if port <= 0 {
 		return false
 	}
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 500*time.Millisecond)
-	if err != nil {
-		return false
+	// Probe both loopback stacks — many Node/Vite servers (e.g. Slidev) bind
+	// [::1] only, while older services listen on 127.0.0.1.
+	addrs := []string{
+		fmt.Sprintf("127.0.0.1:%d", port),
+		fmt.Sprintf("[::1]:%d", port),
 	}
-	_ = conn.Close()
-	return true
+	for _, addr := range addrs {
+		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+		if err != nil {
+			continue
+		}
+		_ = conn.Close()
+		return true
+	}
+	return false
 }
 
 func FindPID(port int) int {
@@ -117,61 +125,9 @@ func GetUptime(pid int) string {
 	return fmt.Sprintf("%02d:%02d:%02d", hours, mins, secs)
 }
 
-// GetCommandForPID returns the executable path of the process with given PID.
-func GetCommandForPID(pid int) string {
-	if pid <= 0 {
-		return ""
-	}
-	if runtime.GOOS == "darwin" {
-		out, err := exec.Command("ps", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
-		if err != nil {
-			return ""
-		}
-		return strings.TrimSpace(string(out))
-	}
-	out, err := exec.Command("ps", "-o", "args=", "-p", strconv.Itoa(pid)).Output()
-	if err != nil {
-		return ""
-	}
-	fields := strings.Fields(strings.TrimSpace(string(out)))
-	if len(fields) > 0 {
-		return fields[0]
-	}
-	return ""
-}
-
-// IsSameBinary checks if the running process command matches the expected service command/binary.
-func IsSameBinary(pid int, expectedCommand string) bool {
-	if pid <= 0 || expectedCommand == "" {
-		return false
-	}
-	// Get full process command or executable
-	var cmdStr string
-	if runtime.GOOS == "darwin" {
-		out, err := exec.Command("ps", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
-		if err == nil {
-			cmdStr = strings.TrimSpace(string(out))
-		}
-	} else {
-		out, err := exec.Command("ps", "-o", "args=", "-p", strconv.Itoa(pid)).Output()
-		if err == nil {
-			cmdStr = strings.TrimSpace(string(out))
-		}
-	}
-	if cmdStr == "" {
-		// Fallback to comm
-		cmdStr = GetCommandForPID(pid)
-	}
-
-	expectedBase := filepath.Base(expectedCommand)
-	actualBase := filepath.Base(cmdStr)
-	if strings.Contains(cmdStr, expectedCommand) || strings.Contains(expectedCommand, cmdStr) || expectedBase == actualBase {
-		return true
-	}
-	return false
-}
-
-// FetchHealth checks a health URL and returns (healthy, detailMessage).
+// FetchHealth GETs healthURL and reports whether the service says it is healthy, with a
+// one-line reason when it isn't. It understands the JSON shape ast-context-cache serves
+// (status, embed_error, startup_message) and treats any other 2xx body as healthy.
 func FetchHealth(healthURL string) (bool, string) {
 	if healthURL == "" {
 		return true, ""
@@ -182,29 +138,32 @@ func FetchHealth(healthURL string) (bool, string) {
 		return false, fmt.Sprintf("health check failed: %v", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return false, fmt.Sprintf("health returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
-
-	// Try to parse JSON for rich status, embed_error, startup_message, data directory error
-	var m map[string]interface{}
-	if json.Unmarshal(body, &m) == nil {
-		if st, ok := m["status"].(string); ok && st != "ok" && st != "healthy" && st != "" {
-			return false, fmt.Sprintf("status: %s", st)
-		}
-		if errStr, ok := m["embed_error"].(string); ok && errStr != "" {
-			return false, errStr
-		}
-		if startup, ok := m["startup_message"].(string); ok && startup != "" && !strings.Contains(strings.ToLower(startup), "ok") {
-			return false, startup
-		}
-		if dataErr, ok := m["data_directory_error"].(string); ok && dataErr != "" {
-			return false, dataErr
-		}
-		if dataErr, ok := m["error"].(string); ok && dataErr != "" {
-			return false, dataErr
+	var h struct {
+		Status         string `json:"status"`
+		Error          string `json:"error"`
+		EmbedError     string `json:"embed_error"`
+		StartupMessage string `json:"startup_message"`
+	}
+	if json.Unmarshal(body, &h) != nil {
+		return true, "healthy"
+	}
+	switch strings.ToLower(h.Status) {
+	case "", "ok", "healthy":
+		return true, "healthy"
+	case "starting":
+		// Still warming up; not a fault to fix.
+		return true, strings.TrimSpace("starting " + h.StartupMessage)
+	}
+	reason := h.Status
+	for _, extra := range []string{h.Error, h.EmbedError, h.StartupMessage} {
+		if extra != "" {
+			reason += ": " + extra
+			break
 		}
 	}
-	return true, "healthy"
+	return false, reason
 }

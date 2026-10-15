@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strconv"
 	"syscall"
 
@@ -29,11 +27,11 @@ func StartEmbedded(cfg config.ServiceConfig) (*Process, error) {
 		return nil, fmt.Errorf("get executable: %w", err)
 	}
 
-	logPath := cfg.Log
-	if logPath == "" {
-		logPath = filepath.Join(os.TempDir(), cfg.Name+".log")
+	logFile, logPath, err := openLog(cfg)
+	if err != nil {
+		return nil, err
 	}
-	_ = os.MkdirAll(filepath.Dir(logPath), 0755)
+	_ = logFile.Close()
 
 	args := []string{
 		"_serve-fs",
@@ -46,9 +44,7 @@ func StartEmbedded(cfg config.ServiceConfig) (*Process, error) {
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 
-	if runtime.GOOS != "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start embedded server: %w", err)

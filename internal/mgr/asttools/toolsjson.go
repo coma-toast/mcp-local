@@ -1,13 +1,16 @@
 package asttools
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
+	"github.com/coma-toast/mcp-local/internal/mgr/safefile"
 )
 
 type fileEntry struct {
@@ -60,22 +63,68 @@ func overridesFromTools(tools []config.ToolConfig) map[string]fileEntry {
 	return out
 }
 
+// toolsScope is the ledger scope for tools.json entries mcp-local wrote.
+const toolsScope = "tools"
+
+// WriteToolsJSON merges the config's tool overrides into tools.json. Entries for tools the
+// config doesn't override are left alone (e.g. ones set in the ast dashboard), unless
+// mcp-local wrote them earlier, in which case they are removed so the tool is back to its
+// default. Keys other than enabled/tier/description are kept. The file is backed up and
+// written atomically, and never deleted.
 func WriteToolsJSON(path string, tools []config.ToolConfig) error {
 	overrides := overridesFromTools(tools)
-	if len(overrides) == 0 {
-		if _, err := os.Stat(path); err == nil {
-			return os.Remove(path)
+	current, err := os.ReadFile(safefile.ResolvePath(path))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	entries, before := map[string]map[string]interface{}{}, map[string]map[string]interface{}{}
+	if len(bytes.TrimSpace(current)) > 0 {
+		if err := json.Unmarshal(current, &entries); err != nil {
+			return fmt.Errorf("parse %s: %w", path, err)
 		}
-		return nil
+		_ = json.Unmarshal(current, &before)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
+	var add, remove []string
+	for _, t := range tools {
+		if t.Name == "" {
+			continue
+		}
+		if o, ok := overrides[t.Name]; ok {
+			entries[t.Name] = withOverride(entries[t.Name], o)
+			add = append(add, t.Name)
+		} else if _, ok := entries[t.Name]; ok && safefile.Recorded(path, toolsScope, t.Name) {
+			delete(entries, t.Name)
+			remove = append(remove, t.Name)
+		}
 	}
-	data, err := json.MarshalIndent(overrides, "", "  ")
-	if err != nil {
-		return err
+	if !reflect.DeepEqual(entries, before) {
+		data, err := json.MarshalIndent(entries, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		if err := safefile.Replace(path, append(data, '\n')); err != nil {
+			return err
+		}
 	}
-	return os.WriteFile(path, append(data, '\n'), 0644)
+	return safefile.Record(path, toolsScope, add, remove)
+}
+
+func withOverride(entry map[string]interface{}, o fileEntry) map[string]interface{} {
+	if entry == nil {
+		entry = map[string]interface{}{}
+	}
+	entry["enabled"] = o.Enabled
+	for k, v := range map[string]string{"tier": o.Tier, "description": o.Description} {
+		if v == "" {
+			delete(entry, k)
+		} else {
+			entry[k] = v
+		}
+	}
+	return entry
 }
 
 func ApplyStartEnv(env []string, svc config.ServiceConfig) ([]string, error) {

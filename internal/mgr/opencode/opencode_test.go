@@ -178,3 +178,21 @@ func isRegistered(t *testing.T, name string) bool {
 	_, ok := block[name]
 	return ok
 }
+
+func TestRegisterServices_HeadersAndUserEnabledKept(t *testing.T) {
+	path := setupTestConfig(t)
+	os.WriteFile(path, []byte(`{"mcp": {"svc": {"type": "remote", "url": "https://old", "enabled": false, "timeout": 5}}}`), 0o644)
+	svc := config.ServiceConfig{Name: "svc", MCPURL: "https://x/mcp", Headers: map[string]string{"X-Key": "k"}}
+	if err := RegisterServices([]config.ServiceConfig{svc}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := jsonagent.ReadJSON(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := m["mcp"].(map[string]interface{})["svc"].(map[string]interface{})
+	h, _ := e["headers"].(map[string]interface{})
+	if e["url"] != "https://x/mcp" || h["X-Key"] != "k" || e["enabled"] != false || e["timeout"] != float64(5) {
+		t.Errorf("entry = %v", e)
+	}
+}

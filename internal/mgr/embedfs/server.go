@@ -3,36 +3,59 @@ package embedfs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
 var protocolVersion = "2024-11-05"
 
 type Server struct {
-	server *http.Server
-	root   string
+	server  *http.Server
+	root    string // absolute, symlinks resolved
+	rootErr error
 }
 
 func New(root string) *Server {
-	return &Server{root: root}
+	resolved, err := resolveRoot(root)
+	return &Server{root: resolved, rootErr: err}
 }
 
-func (s *Server) Serve(port int, logPath string) error {
+func resolveRoot(root string) (string, error) {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("root %s: %w", root, err)
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("root %s: %w", root, err)
+	}
+	return resolved, nil
+}
+
+// Handler is the full HTTP surface: /mcp and /health behind the localhost guard.
+func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp", s.handleMCP)
 	mux.HandleFunc("/health", s.handleHealth)
+	return guard(mux)
+}
 
-	s.server = &http.Server{
-		Handler: mux,
+func (s *Server) Serve(port int, logPath string) error {
+	if s.rootErr != nil {
+		return s.rootErr
 	}
-
+	s.server = &http.Server{Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
 		return fmt.Errorf("listen :%d: %w", port, err)
@@ -46,6 +69,42 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	return s.server.Shutdown(ctx)
+}
+
+// guard blocks browsers from driving the server: a cross-site page can send a
+// CORS-free text/plain POST, and DNS rebinding makes a foreign name resolve to 127.0.0.1.
+func guard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isLocalHost(r.Host) {
+			http.Error(w, "forbidden host", http.StatusForbidden)
+			return
+		}
+		if o := r.Header.Get("Origin"); o != "" && !isLocalOrigin(o) {
+			http.Error(w, "forbidden origin", http.StatusForbidden)
+			return
+		}
+		if r.Method == http.MethodPost {
+			if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/json" {
+				http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// isLocalHost accepts localhost, 127.0.0.1 or [::1], with or without a port.
+func isLocalHost(hostport string) bool {
+	host, _, err := net.SplitHostPort(hostport)
+	if err != nil {
+		host = strings.TrimSuffix(strings.TrimPrefix(hostport, "["), "]")
+	}
+	return strings.EqualFold(host, "localhost") || host == "127.0.0.1" || host == "::1"
+}
+
+func isLocalOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && isLocalHost(u.Host)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -183,6 +242,9 @@ func (s *Server) handleToolsCall(req jsonRPCReq) jsonRPCResp {
 		}
 	}
 
+	if s.rootErr != nil {
+		return jsonRPCResp{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: -32000, Message: s.rootErr.Error()}}
+	}
 	result, err := handler(s.root, params.Arguments)
 	if err != nil {
 		return jsonRPCResp{
@@ -212,32 +274,58 @@ func writeError(w http.ResponseWriter, id interface{}, code int, msg string) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+// safeJoin maps sub onto root (already symlink-resolved) and resolves symlinks
+// in the result, so a link inside root cannot carry a read or write outside it.
 func safeJoin(root, sub string) (string, error) {
-	rootAbs, err := filepath.Abs(root)
-	if err != nil {
-		return "", err
-	}
-	target := filepath.Join(rootAbs, sub)
-	targetAbs, err := filepath.Abs(target)
-	if err != nil {
-		return "", err
-	}
-	if !isWithin(targetAbs, rootAbs) {
+	joined := filepath.Join(root, sub)
+	if !isWithin(joined, root) {
 		return "", fmt.Errorf("path escapes root: %s", sub)
 	}
-	return targetAbs, nil
+	target, err := resolvePath(joined)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", sub, err)
+	}
+	if !isWithin(target, root) {
+		return "", fmt.Errorf("path escapes root: %s", sub)
+	}
+	return target, nil
+}
+
+// resolvePath resolves symlinks in the deepest existing prefix of the clean
+// absolute path p and re-joins the not-yet-existing rest.
+func resolvePath(p string) (string, error) {
+	cur, rest := p, ""
+	for {
+		_, err := os.Lstat(cur)
+		if err == nil {
+			// Fails for a dangling symlink, which a write would otherwise follow.
+			resolved, err := filepath.EvalSymlinks(cur)
+			if err != nil {
+				return "", err
+			}
+			return filepath.Join(resolved, rest), nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return p, nil
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+		cur = parent
+	}
 }
 
 func isWithin(target, root string) bool {
 	rel, err := filepath.Rel(root, target)
-	if err != nil {
-		return false
-	}
-	return !strings.HasPrefix(rel, "..")
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+// LogTo appends a timestamped line to logPath. The log may hold paths and errors from
+// the served tree, so it is private and never written through a planted symlink.
 func LogTo(logPath, line string) {
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return
 	}

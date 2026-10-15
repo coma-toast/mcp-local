@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,6 +28,7 @@ import (
 	"github.com/coma-toast/mcp-local/internal/mgr/jsonagent"
 	"github.com/coma-toast/mcp-local/internal/mgr/logs"
 	"github.com/coma-toast/mcp-local/internal/mgr/opencode"
+	"github.com/coma-toast/mcp-local/internal/mgr/process"
 	"github.com/coma-toast/mcp-local/internal/portutil"
 	"github.com/coma-toast/mcp-local/internal/statusui"
 	"github.com/coma-toast/mcp-local/internal/tui"
@@ -80,35 +82,7 @@ func addCommands() {
 				names = []string{args[0]}
 			}
 			client := &http.Client{Timeout: 3 * time.Second}
-			for _, name := range names {
-				svc, _ := cfg.ServiceNamed(name)
-				if svc.HealthURL == "" {
-					fmt.Printf("%-24s  no health_url configured\n", name)
-					continue
-				}
-				resp, err := client.Get(svc.HealthURL)
-				if err != nil {
-					fmt.Printf("%-24s  ERROR: %v\n", name, err)
-					continue
-				}
-				body, _ := io.ReadAll(resp.Body)
-				resp.Body.Close()
-				var pretty string
-				var obj interface{}
-				if json.Unmarshal(body, &obj) == nil {
-					b, _ := json.MarshalIndent(obj, "                          ", "  ")
-					pretty = string(b)
-				} else {
-					pretty = strings.TrimSpace(string(body))
-				}
-				status := fmt.Sprintf("HTTP %d", resp.StatusCode)
-				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-					fmt.Printf("%-24s  ✓ %s  %s\n", name, status, pretty)
-				} else {
-					fmt.Fprintf(cmd.ErrOrStderr(), "%-24s  ✗ %s  %s\n", name, status, pretty)
-				}
-			}
-			return nil
+			return failures(cmd, runHealth(cfg, names, client, cmd.OutOrStdout(), cmd.ErrOrStderr()), "pass health checks")
 		},
 	}
 	rootCmd.AddCommand(health)
@@ -131,6 +105,43 @@ func addCommands() {
 	rootCmd.AddCommand(cmdJSON())
 	rootCmd.AddCommand(cmdServeFS())
 	rootCmd.AddCommand(cmdBridge())
+}
+
+// runHealth GETs each service's health_url and returns how many failed. Services
+// without a health_url are skipped, not failed.
+func runHealth(cfg *config.ManagerConfig, names []string, client *http.Client, out, errOut io.Writer) int {
+	failed := 0
+	for _, name := range names {
+		svc, _ := cfg.ServiceNamed(name)
+		if svc.HealthURL == "" {
+			fmt.Fprintf(out, "%-24s  no health_url configured\n", name)
+			continue
+		}
+		resp, err := client.Get(svc.HealthURL)
+		if err != nil {
+			fmt.Fprintf(errOut, "%-24s  ✗ ERROR: %v\n", name, err)
+			failed++
+			continue
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		var pretty string
+		var obj interface{}
+		if json.Unmarshal(body, &obj) == nil {
+			b, _ := json.MarshalIndent(obj, "                          ", "  ")
+			pretty = string(b)
+		} else {
+			pretty = strings.TrimSpace(string(body))
+		}
+		status := fmt.Sprintf("HTTP %d", resp.StatusCode)
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			fmt.Fprintf(out, "%-24s  ✓ %s  %s\n", name, status, pretty)
+		} else {
+			fmt.Fprintf(errOut, "%-24s  ✗ %s  %s\n", name, status, pretty)
+			failed++
+		}
+	}
+	return failed
 }
 
 func cmdList() *cobra.Command {
@@ -164,36 +175,11 @@ func cmdLog() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			logPath := svc.Log
-			if logPath == "" {
-				logPath = filepath.Join(os.TempDir(), args[0]+".log")
-			}
+			logPath := process.LogPath(svc)
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
 			fmt.Printf("==> %s <==\n", logPath)
-			for {
-				f, err := os.Open(logPath)
-				if err != nil {
-					time.Sleep(200 * time.Millisecond)
-					continue
-				}
-				_, _ = f.Seek(0, io.SeekEnd)
-				reader := bufio.NewReader(f)
-				for {
-					line, err := reader.ReadString('\n')
-					if line != "" {
-						fmt.Print(line)
-					}
-					if err == io.EOF {
-						_ = f.Close()
-						time.Sleep(200 * time.Millisecond)
-						break
-					}
-					if err != nil {
-						_ = f.Close()
-						time.Sleep(200 * time.Millisecond)
-						break
-					}
-				}
-			}
+			return logs.Follower{Path: logPath, Out: os.Stdout, Err: os.Stderr}.Run(ctx)
 		},
 	}
 }
@@ -364,13 +350,9 @@ func cmdAdd() *cobra.Command {
 					}
 				}
 				if svc.Log == "" && svc.Command != "" {
-					suggested := filepath.Join(os.TempDir(), name+".log")
-					val := prompt(fmt.Sprintf("Log path [%s]: ", suggested))
-					if strings.TrimSpace(val) == "" {
-						svc.Log = suggested
-					} else {
-						svc.Log = strings.TrimSpace(val)
-					}
+					suggested := process.LogPath(config.ServiceConfig{Name: name})
+					// Empty keeps the default, resolved per machine, out of the (often shared) config.
+					svc.Log = strings.TrimSpace(prompt(fmt.Sprintf("Log path [%s]: ", suggested)))
 				}
 			}
 			if svc.MCPType == "filesystem" && strings.TrimSpace(svc.Path) == "" {
@@ -456,7 +438,9 @@ func cmdRemove() *cobra.Command {
 			}
 			if deregister {
 				svc, _ := cfg.ServiceNamed(name)
-				deregisterHosts(cmd, svc, agents.TargetsFromConfig(*cfg))
+				if err := deregisterHosts(cmd, svc, agents.TargetsFromConfig(*cfg), true); err != nil {
+					return fmt.Errorf("%w\n%s is still in config.yaml: fix the agent config file(s) above and retry, or run: mcp-local remove %s --deregister=false", err, name, name)
+				}
 			}
 			var remaining []config.ServiceConfig
 			for _, s := range cfg.Services {
@@ -490,6 +474,10 @@ func cmdEdit() *cobra.Command {
 				return err
 			}
 			if err := tui.RunServiceEditor(&svc); err != nil {
+				if errors.Is(err, tui.ErrCancelled) {
+					fmt.Println("No changes saved.")
+					return nil
+				}
 				return err
 			}
 			for i := range cfg.Services {
@@ -585,14 +573,16 @@ func cmdValidate() *cobra.Command {
 			warnings := 0
 			for _, svc := range cfg.Services {
 				prefix := fmt.Sprintf("[%s]", svc.Name)
-				if svc.Command == "" && svc.MCPURL == "" {
+				switch {
+				case svc.Command == "" && !svc.IsHTTP():
+					fmt.Fprintf(cmd.ErrOrStderr(), "%s ERROR: stdio service has no command\n", prefix)
+					errors++
+				case svc.Command == "" && svc.MCPEndpoint() == "":
 					fmt.Fprintf(cmd.ErrOrStderr(), "%s ERROR: no command or mcp_url configured\n", prefix)
 					errors++
-				}
-				if svc.Command != "" {
-					expanded := config.ExpandPath(svc.Command)
-					if _, err := os.Stat(expanded); os.IsNotExist(err) {
-						fmt.Fprintf(cmd.ErrOrStderr(), "%s ERROR: command not found: %s\n", prefix, expanded)
+				case svc.Command != "":
+					if err := findCommand(config.ExpandPath(svc.Command)); err != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "%s ERROR: command not found: %v\n", prefix, err)
 						errors++
 					}
 				}
@@ -623,6 +613,16 @@ func cmdValidate() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// findCommand checks a command: a bare name (npx, uvx) is looked up on PATH, a path must exist.
+func findCommand(c string) error {
+	if !strings.ContainsRune(c, '/') {
+		_, err := exec.LookPath(c)
+		return err
+	}
+	_, err := os.Stat(c)
+	return err
 }
 
 func cmdRegister() *cobra.Command {
@@ -696,7 +696,9 @@ func cmdDeregister() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "deregister [service]",
 		Short: "Remove MCP entries from OpenCode, Cursor, and Claude configs",
-		Long:  "Without a service name: removes entries for services that have mcp_url and are not running. With a name: always removes that entry.",
+		Long: `Without a service name: removes the entries of HTTP services with a port that is not in use,
+and only entries mcp-local wrote itself (entries it did not write are skipped with a note).
+With a name: always removes that service's entries.`,
 		Example: `  mcp-local deregister
   mcp-local deregister my-server
   mcp-local deregister --dry-run`,
@@ -714,10 +716,10 @@ func cmdDeregister() *cobra.Command {
 			var toDeregister []string
 			for _, name := range names {
 				svc, _ := cfg.ServiceNamed(name)
-				if svc.MCPURL == "" && svc.Command == "" {
+				if !force && !(svc.IsHTTP() && svc.Port > 0) {
 					continue
 				}
-				if !force && svc.Port > 0 && portutil.IsRunning(svc.Port) {
+				if !force && portIsRunning(svc.Port) {
 					fmt.Printf("  %-24s skipped (running)\n", name)
 					continue
 				}
@@ -738,28 +740,38 @@ func cmdDeregister() *cobra.Command {
 				}
 				return nil
 			}
+			var errs []error
 			for _, name := range toDeregister {
 				svc, _ := cfg.ServiceNamed(name)
-				deregisterHosts(cmd, svc, targets)
+				errs = append(errs, deregisterHosts(cmd, svc, targets, force))
 			}
-			return nil
+			return errors.Join(errs...)
 		},
 	}
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "preview changes without writing")
 	return c
 }
 
-// deregisterHosts removes svc from each enabled host, reporting only entries actually removed.
-func deregisterHosts(cmd *cobra.Command, svc config.ServiceConfig, targets agents.Targets) {
+// portIsRunning is swappable in tests.
+var portIsRunning = portutil.IsRunning
+
+// deregisterHosts removes svc from each enabled host, reporting entries removed or skipped,
+// and returns every host's error joined. explicit also removes entries mcp-local didn't write.
+func deregisterHosts(cmd *cobra.Command, svc config.ServiceConfig, targets agents.Targets, explicit bool) error {
+	var errs []error
 	for _, host := range targets.Hosts() {
-		found, err := agents.Deregister(svc, host)
+		res, err := agents.Deregister(svc, host, explicit)
 		switch {
 		case err != nil:
 			fmt.Fprintf(cmd.ErrOrStderr(), "  %-24s %s ERROR: %v\n", svc.Name, host, err)
-		case found:
-			fmt.Printf("  %-24s %s removed\n", svc.Name, host)
+			errs = append(errs, fmt.Errorf("%s: %s: %w", svc.Name, host, err))
+		case res == agents.Removed:
+			fmt.Fprintf(cmd.OutOrStdout(), "  %-24s %s removed\n", svc.Name, host)
+		case res == agents.NotOwned:
+			fmt.Fprintf(cmd.OutOrStdout(), "  %-24s %s skipped (entry not written by mcp-local; name the service to remove it)\n", svc.Name, host)
 		}
 	}
+	return errors.Join(errs...)
 }
 
 func cmdLogsUnified() *cobra.Command {
@@ -775,17 +787,12 @@ func cmdLogsUnified() *cobra.Command {
 				if err != nil {
 					continue
 				}
-				entries = append(entries, logs.Entry{Name: name, Path: svc.Log})
+				entries = append(entries, logs.Entry{Name: name, Path: process.LogPath(svc)})
 			}
-			stop := make(chan struct{})
-			go func() {
-				sigChan := make(chan os.Signal, 1)
-				signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-				<-sigChan
-				close(stop)
-			}()
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
 			fmt.Println("Tailing logs (Press Ctrl+C to stop)...")
-			logs.StreamLogs(entries, stop)
+			logs.StreamLogs(ctx, entries, os.Stdout, os.Stderr)
 		},
 	}
 }
@@ -800,6 +807,10 @@ func cmdTools() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			cfg := mustConfig()
 			if err := tui.RunToolManager(cfg); err != nil {
+				if errors.Is(err, tui.ErrCancelled) {
+					fmt.Println("No changes saved.")
+					return
+				}
 				fmt.Printf("Error: %v\n", err)
 				os.Exit(1)
 			}
@@ -894,19 +905,7 @@ func cmdToolsSync() *cobra.Command {
 			for _, t := range svc.Tools {
 				existing[t.Name] = t
 			}
-			var merged []config.ToolConfig
-			for _, t := range tools {
-				if prev, ok := existing[t.Name]; ok {
-					t.Enabled = prev.Enabled
-					if prev.Tier != "" {
-						t.Tier = prev.Tier
-					}
-					if prev.Description != "" {
-						t.Description = prev.Description
-					}
-				}
-				merged = append(merged, t)
-			}
+			merged := mergeSyncedTools(tools, existing)
 			for i := range cfg.Services {
 				if cfg.Services[i].Name == args[0] {
 					cfg.Services[i].Tools = merged
@@ -927,6 +926,24 @@ func cmdToolsSync() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// mergeSyncedTools keeps the user's settings for each tool the server lists. The server's
+// own description is not stored: only a description the user changed is an override.
+func mergeSyncedTools(server []config.ToolConfig, existing map[string]config.ToolConfig) []config.ToolConfig {
+	var merged []config.ToolConfig
+	for _, t := range server {
+		serverDesc := t.Description
+		t.Description = ""
+		if prev, ok := existing[t.Name]; ok {
+			t.Enabled, t.Tier = prev.Enabled, prev.Tier
+			if prev.Description != serverDesc {
+				t.Description = prev.Description
+			}
+		}
+		merged = append(merged, t)
+	}
+	return merged
 }
 
 type jsonRPCRequest struct {
@@ -1076,46 +1093,8 @@ func cmdImport() *cobra.Command {
 					if entry == nil {
 						continue
 					}
-					svc := config.ServiceConfig{Name: name}
-					entryType, _ := entry["type"].(string)
-					if url, ok := bridgeURL(entry); ok {
-						svc.MCPType = "http"
-						svc.MCPURL = url
-					} else if entryType == "remote" || entryType == "http" {
-						svc.MCPType = "http"
-						if url, ok := entry["url"].(string); ok {
-							svc.MCPURL = url
-						}
-					} else if entryType == "local" || entryType == "stdio" || entryType == "" {
-						svc.MCPType = "stdio"
-						if cmdArr, ok := entry["command"].([]interface{}); ok {
-							if len(cmdArr) > 0 {
-								svc.Command, _ = cmdArr[0].(string)
-								for _, a := range cmdArr[1:] {
-									if s, ok := a.(string); ok {
-										svc.Args = append(svc.Args, s)
-									}
-								}
-							}
-						} else if cmdStr, ok := entry["command"].(string); ok {
-							svc.Command = cmdStr
-						}
-						if env, ok := entry["env"].(map[string]interface{}); ok {
-							svc.Env = make(map[string]string)
-							for k, v := range env {
-								svc.Env[k], _ = v.(string)
-							}
-						}
-						if env, ok := entry["environment"].(map[string]interface{}); ok {
-							if svc.Env == nil {
-								svc.Env = make(map[string]string)
-							}
-							for k, v := range env {
-								svc.Env[k], _ = v.(string)
-							}
-						}
-					}
-					if svc.Command != "" || svc.MCPURL != "" {
+					svc, ok := serviceFromEntry(name, entry)
+					if ok {
 						cfg.Services = append(cfg.Services, svc)
 						existing[name] = true
 						imported++
@@ -1138,15 +1117,89 @@ func cmdImport() *cobra.Command {
 	return c
 }
 
-// bridgeURL recognizes a Claude Desktop entry written by mcp-local: {"command": ".../mcp-local", "args": ["bridge", url]}.
-func bridgeURL(entry map[string]interface{}) (string, bool) {
-	cmd, _ := entry["command"].(string)
-	args, _ := entry["args"].([]interface{})
-	if filepath.Base(cmd) != "mcp-local" || len(args) < 2 || args[0] != "bridge" {
-		return "", false
+// serviceFromEntry converts an OpenCode, Cursor or Claude Desktop entry into a service,
+// keeping everything register writes back (args, env, headers) so a later register doesn't
+// clobber the entry. ok is false when the entry has neither a command nor a URL.
+func serviceFromEntry(name string, entry map[string]interface{}) (config.ServiceConfig, bool) {
+	svc := config.ServiceConfig{Name: name}
+	entryType, _ := entry["type"].(string)
+	url, _ := entry["url"].(string)
+	if bridge, headers, ok := bridgeEntry(entry); ok {
+		svc.MCPType, svc.MCPURL, svc.Headers = "http", bridge, headers
+	} else if url != "" || entryType == "remote" || entryType == "http" || entryType == "sse" || entryType == "streamable-http" {
+		svc.MCPType, svc.MCPURL, svc.Headers = "http", url, stringMap(entry["headers"])
+	} else {
+		svc.MCPType = "stdio"
+		switch c := entry["command"].(type) {
+		case []interface{}:
+			if cmd := stringSlice(c); len(cmd) > 0 {
+				svc.Command, svc.Args = cmd[0], cmd[1:]
+			}
+		case string:
+			svc.Command = c
+		}
+		svc.Args = append(svc.Args, stringSlice(entry["args"])...)
+		svc.Env = stringMap(entry["env"])
+		for k, v := range stringMap(entry["environment"]) {
+			if svc.Env == nil {
+				svc.Env = map[string]string{}
+			}
+			svc.Env[k] = v
+		}
 	}
-	url, ok := args[1].(string)
-	return url, ok
+	if len(svc.Args) == 0 {
+		svc.Args = nil
+	}
+	return svc, svc.Command != "" || svc.MCPURL != ""
+}
+
+func stringSlice(v interface{}) []string {
+	arr, _ := v.([]interface{})
+	var out []string
+	for _, a := range arr {
+		if s, ok := a.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func stringMap(v interface{}) map[string]string {
+	m, _ := v.(map[string]interface{})
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, val := range m {
+		out[k], _ = val.(string)
+	}
+	return out
+}
+
+// bridgeEntry recognizes a Claude Desktop entry written by mcp-local:
+// {"command": ".../mcp-local", "args": ["bridge", url, "--header", "K=V", ...]}. Entries with
+// any other bridge flags are not recognized, so importing them as stdio keeps those flags.
+func bridgeEntry(entry map[string]interface{}) (string, map[string]string, bool) {
+	cmd, _ := entry["command"].(string)
+	args := stringSlice(entry["args"])
+	if filepath.Base(cmd) != "mcp-local" || len(args) < 2 || args[0] != "bridge" {
+		return "", nil, false
+	}
+	var headers map[string]string
+	for rest := args[2:]; len(rest) > 0; rest = rest[2:] {
+		if rest[0] != "--header" || len(rest) < 2 {
+			return "", nil, false
+		}
+		k, v, ok := strings.Cut(rest[1], "=")
+		if !ok {
+			return "", nil, false
+		}
+		if headers == nil {
+			headers = map[string]string{}
+		}
+		headers[k] = v
+	}
+	return args[1], headers, true
 }
 
 func cmdServeFS() *cobra.Command {

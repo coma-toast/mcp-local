@@ -2,12 +2,10 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
-	"strings"
-	"time"
+	"syscall"
 
 	"github.com/coma-toast/mcp-local/internal/mgr/agents"
 	"github.com/coma-toast/mcp-local/internal/mgr/claudedesktop"
@@ -16,252 +14,173 @@ import (
 	"github.com/coma-toast/mcp-local/internal/mgr/opencode"
 	"github.com/coma-toast/mcp-local/internal/mgr/process"
 	"github.com/coma-toast/mcp-local/internal/mgr/runtime"
-	"github.com/coma-toast/mcp-local/internal/portutil"
 	"github.com/spf13/cobra"
 )
 
+// lowDiskPercent is the free-space level below which doctor warns about a log volume.
+var lowDiskPercent = 5.0
+
 func addDoctor() {
+	var fix bool
 	doctor := &cobra.Command{
 		Use:   "doctor [service]",
-		Short: "Diagnose and optionally fix stuck service issues",
+		Short: "Diagnose stuck services and optionally apply safe fixes",
+		Long: `Checks each service for untracked copies holding its ports, other programs on its
+ports, failing health checks, stale PID files, missing dependencies, missing agent
+registrations, and low disk space on its log volume.
+
+Without --fix nothing is changed. --fix only stops untracked copies of the service's own
+binary, removes stale PID files, restarts degraded services and re-registers. It never
+stops another program. Exits non-zero while any problem remains.`,
 		Example: `  mcp-local doctor
-  mcp-local doctor my-server
   mcp-local doctor my-server --fix`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			forceFix, _ := cmd.Flags().GetBool("fix")
-			name := ""
-			if len(args) > 0 {
-				name = args[0]
+			cfg := mustConfig()
+			names := cfg.SortedNames()
+			if len(args) == 1 {
+				if _, err := cfg.ServiceNamed(args[0]); err != nil {
+					return err
+				}
+				names = args
 			}
-			doctorRun(name, forceFix)
+			remaining := 0
+			for _, name := range names {
+				svc, _ := cfg.ServiceNamed(name)
+				remaining += doctorService(cfg, svc, fix, os.Stdout)
+			}
+			if remaining > 0 {
+				cmd.SilenceUsage = true
+				return fmt.Errorf("%d problem(s) remain", remaining)
+			}
+			fmt.Println("\n✅ No problems found")
 			return nil
 		},
 	}
-	doctor.Flags().BoolP("fix", "f", false, "apply safe fixes automatically")
+	doctor.Flags().BoolVarP(&fix, "fix", "f", false, "apply safe fixes")
 	rootCmd.AddCommand(doctor)
 }
 
-func doctorRun(name string, forceFix bool) {
-	cfg := mustConfig()
-	targets := agents.TargetsFromConfig(*cfg)
-
-	var svc config.ServiceConfig
-	if name != "" {
-		var err error
-		svc, err = cfg.ServiceNamed(name)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "❌ Service %q not found: %v\n", name, err)
-			return
-		}
-	}
-
-	if name != "" {
-		doctorService(cfg, svc, targets, forceFix)
-	} else {
-		// Run doctor on all services
-		for _, sName := range cfg.SortedNames() {
-			svc, _ := cfg.ServiceNamed(sName)
-			doctorService(cfg, svc, targets, forceFix)
-		}
-	}
+// finding is one problem doctor found, with the fix --fix would apply (nil when there is
+// no safe automatic fix).
+type finding struct {
+	what string
+	fix  func() error
 }
 
-func doctorService(cfg *config.ManagerConfig, svc config.ServiceConfig, targets agents.Targets, forceFix bool) {
-	fmt.Printf("\n🔍 Doctor examining: %s\n", svc.Name)
-	fmt.Printf("   command: %s\n", svc.Command)
-	if svc.Port > 0 {
-		fmt.Printf("   port: %d\n", svc.Port)
+// doctorService prints svc's report and returns how many problems remain.
+func doctorService(cfg *config.ManagerConfig, svc config.ServiceConfig, fix bool, w io.Writer) int {
+	st := runtime.CheckStatus(svc)
+	fmt.Fprintf(w, "\n🔍 %s: %s", svc.Name, st.State)
+	if st.Detail != "" && st.Detail != string(st.State) {
+		fmt.Fprintf(w, " (%s)", st.Detail)
 	}
-	if svc.HealthURL != "" {
-		fmt.Printf("   health_url: %s\n", svc.HealthURL)
-	}
-	if svc.DashboardURL != "" {
-		fmt.Printf("   dashboard_url: %s\n", svc.DashboardURL)
-	}
-	if svc.MCPURL != "" {
-		fmt.Printf("   mcp_url: %s\n", svc.MCPURL)
-	}
-	if len(svc.ExtraPorts) > 0 {
-		fmt.Printf("   extra_ports: %v\n", svc.ExtraPorts)
-	}
-
-	ownedPorts := svc.OwnedPorts()
-
-	// 1. Check PID file status
-	if pid, err := process.LoadPID(svc.Name); err == nil {
-		if runtime.IsPIDAlive(pid) {
-			fmt.Printf("   PID file: %s — PID %d (alive)\n", getPIDFilePath(svc.Name), pid)
-		} else {
-			fmt.Printf("   PID file: %s — PID %d (stale)\n", getPIDFilePath(svc.Name), pid)
-			process.RemovePID(svc.Name)
+	fmt.Fprintln(w)
+	var found []finding
+	restart := func() error {
+		if _, failed := restartServices(cfg, []string{svc.Name}, os.Stderr); failed > 0 {
+			return fmt.Errorf("restart failed")
 		}
-	} else {
-		fmt.Printf("   PID file: missing (no PID file configured)\n")
+		return nil
 	}
-
-	// 2. Check owned ports for orphans and port conflicts
-	fmt.Println("   Owned ports:")
-	for _, p := range ownedPorts {
-		if portutil.IsRunning(p) {
-			pid := portutil.FindPID(p)
-			if pid > 0 {
-				cmdName := portutil.GetCommandForPID(pid)
-				if portutil.IsSameBinary(pid, svc.Command) {
-					fmt.Printf("   - port %d: held by %s PID %d (same binary) — orphaned\n", p, cmdName, pid)
-					if forceFix {
-						// Stop same-binary orphan
-						fmt.Printf("   ✅  FIX: Stopping same-binary orphan (PID %d) on port %d\n", pid, p)
-						_ = process.RemovePID(svc.Name)
-					}
-				} else {
-					fmt.Printf("   - port %d: held by %s PID %d — port conflict\n", p, cmdName, pid)
-					if forceFix {
-						fmt.Printf("   ❌  Cannot fix: port %d held by different program %q (PID %d). Not killing.\n", p, cmdName, pid)
-					}
-				}
-			}
-		} else {
-			fmt.Printf("   - port %d: not listening\n", p)
-		}
+	switch {
+	case st.Orphan.PID > 0:
+		found = append(found, finding{st.Detail, func() error {
+			_, err := process.Terminate(process.SignalTarget(st.Orphan.PID), portsFree(svc.OwnedPorts()))
+			return err
+		}})
+	case st.State == config.StateConflict:
+		found = append(found, finding{st.Detail + "; stop that program or change the service's ports", nil})
+	case st.State == config.StateDegraded:
+		found = append(found, finding{st.Detail, restart})
 	}
-
-	// 3. Check health
-	if svc.HealthURL != "" {
-		fmt.Println("   Health check:")
-		healthy, healthDetail := portutil.FetchHealth(svc.HealthURL)
-		if healthy {
-			fmt.Printf("   ✓ healthy\n")
-		} else {
-			fmt.Printf("   ✗ %s\n", healthDetail)
-			if forceFix {
-				// Attempt to restart if degraded
-				fmt.Printf("   ℹ️  Attempting restart...\n")
-				_ = stopServiceNamed(cfg, svc.Name, true)
-				time.Sleep(restartDelay)
-				_, _ = startServices(cfg, []string{svc.Name}, &cobra.Command{})
-				fmt.Printf("   ✅  Restart attempted\n")
-			}
-		}
-	} else {
-		fmt.Println("   No health_url configured")
+	if st.Stale {
+		found = append(found, finding{fmt.Sprintf("stale PID file %s", process.GetPIDFile(svc.Name)), func() error { return process.RemovePID(svc.Name) }})
 	}
-
-	// 4. Check missing deps
-	fmt.Println("   Dependencies:")
 	for _, dep := range svc.Deps {
-		expanded := config.ExpandPath(dep)
-		if _, err := os.Stat(expanded); os.IsNotExist(err) {
-			fmt.Printf("   ✗ missing: %s\n", dep)
-		} else {
-			fmt.Printf("   ✓ %s\n", dep)
+		if _, err := os.Stat(config.ExpandPath(dep)); err != nil {
+			found = append(found, finding{fmt.Sprintf("dependency missing: %s", dep), nil})
 		}
 	}
-
-	// 5. Check stale PID file (second check, focused)
-	if pid, err := process.LoadPID(svc.Name); err == nil && !runtime.IsPIDAlive(pid) {
-		fmt.Printf("   ✗ stale PID file: PID %d (process dead)\n", pid)
-		if forceFix {
-			_ = process.RemovePID(svc.Name)
-			fmt.Printf("   ✅  FIX: Removed stale PID file\n")
+	if missing := missingRegistrations(cfg, svc); len(missing) > 0 {
+		found = append(found, finding{fmt.Sprintf("not registered with %v", missing), func() error {
+			return agents.RegisterAll([]config.ServiceConfig{svc}, agents.TargetsFromConfig(*cfg))
+		}})
+	}
+	if process.ModeOf(svc) == process.Daemon || process.ModeOf(svc) == process.Embedded {
+		logPath := process.LogPath(svc)
+		if free, ok := freePercent(logPath); ok && free < lowDiskPercent {
+			found = append(found, finding{fmt.Sprintf("only %.1f%% free on the volume holding %s", free, logPath), nil})
 		}
 	}
-
-	// 6. Check agent registration
-	fmt.Println("   Agent registration:")
-	if svc.MCPURL != "" && svc.Command == "" {
-		fmt.Printf("   → remote only (mcp_url), auto-registered via mcp_url\n")
-	} else if svc.Command != "" || svc.MCPURL != "" {
-		if targets.OpenCode {
-			ocReg := isRegisteredInFile(opencode.ConfigPath(), svc.Name)
-			fmt.Printf("   OpenCode: %s\n", statusIcon(ocReg))
-		}
-		if targets.Cursor {
-			curReg := isRegisteredInFile(cursor.ConfigPath(), svc.Name)
-			fmt.Printf("   Cursor: %s\n", statusIcon(curReg))
-		}
-		if targets.Claude {
-			claudeReg := isRegisteredInFile(claudedesktop.ConfigPath(), svc.Name)
-			fmt.Printf("   Claude: %s\n", statusIcon(claudeReg))
-		}
-	} else {
-		fmt.Printf("   → no mcp_url or command; not registering\n")
-	}
-
-	// 7. Check disk space on volume holding log
-	if svc.Log != "" {
-		logDir := filepath.Dir(svc.Log)
-		fs := filepath.Dir(logDir)
-		usage := getDiskUsage(fs)
-		freePct := usage.FreePercent
-		if freePct < 5 {
-			fmt.Printf("   ⚠️  low disk space: %.1f%% free on %s\n", freePct, fs)
-			if forceFix {
-				fmt.Printf("   ⚠️  FIX: Cannot auto-resolve low disk space. Free up space or change log path.\n")
+	remaining := 0
+	for _, f := range found {
+		switch {
+		case !fix:
+			hint := "no automatic fix"
+			if f.fix != nil {
+				hint = "--fix resolves this"
 			}
-		} else {
-			fmt.Printf("   ✓ disk space: %.1f%% free\n", freePct)
+			fmt.Fprintf(w, "  ✗ %s (%s)\n", f.what, hint)
+			remaining++
+		case f.fix == nil:
+			fmt.Fprintf(w, "  ✗ %s (no automatic fix)\n", f.what)
+			remaining++
+		default:
+			if err := f.fix(); err != nil {
+				fmt.Fprintf(w, "  ✗ %s: fix failed: %v\n", f.what, err)
+				remaining++
+				continue
+			}
+			fmt.Fprintf(w, "  ✅ fixed: %s\n", f.what)
 		}
-	} else {
-		fmt.Println("   No log path configured, skipping disk space check")
 	}
-
-	fmt.Printf("\n✅ Doctor complete for %s\n", svc.Name)
+	if len(found) == 0 {
+		fmt.Fprintln(w, "  ✓ no problems")
+	}
+	return remaining
 }
 
-func getPIDFilePath(name string) string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".mcp-local", "pids", name+".pid")
+// missingRegistrations lists the enabled agent hosts whose config lacks svc. Services
+// mcp-local can't register (no command and no mcp_url) are skipped.
+func missingRegistrations(cfg *config.ManagerConfig, svc config.ServiceConfig) []string {
+	if svc.Command == "" && svc.MCPURL == "" {
+		return nil
+	}
+	t := agents.TargetsFromConfig(*cfg)
+	var missing []string
+	for _, h := range []struct {
+		on   bool
+		name string
+		path string
+	}{
+		{t.OpenCode, "OpenCode", opencode.ConfigPath()},
+		{t.Cursor, "Cursor", cursor.ConfigPath()},
+		{t.Claude, "Claude Desktop", claudedesktop.ConfigPath()},
+	} {
+		if h.on && !isRegisteredInFile(h.path, svc.Name) {
+			missing = append(missing, h.name)
+		}
+	}
+	return missing
 }
 
-func statusIcon(registered bool) string {
-	if registered {
-		return "✅"
+// freePercent reports the free space on the volume holding path, using its nearest
+// existing ancestor directory.
+func freePercent(path string) (float64, bool) {
+	dir := filepath.Dir(path)
+	for {
+		var fs syscall.Statfs_t
+		if err := syscall.Statfs(dir, &fs); err == nil {
+			if fs.Blocks == 0 {
+				return 0, false
+			}
+			return 100 * float64(fs.Bavail) / float64(fs.Blocks), true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return 0, false
+		}
+		dir = parent
 	}
-	return "❌"
-}
-
-func getDiskUsage(path string) *diskUsageInfo {
-	result := &diskUsageInfo{}
-	var cmd string
-	if os.Getenv("GOOS") == "windows" {
-		// On Windows, just report we can't check
-		return result
-	} else if os.Getenv("GOOS") == "darwin" {
-		cmd = "df -P " + path
-	} else {
-		cmd = "df -B1 " + path
-	}
-	out, err := exec.Command("bash", "-c", cmd).Output()
-	if err != nil {
-		return result
-	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	if len(lines) < 2 {
-		return result
-	}
-	fields := strings.Fields(lines[1])
-	if len(fields) < 5 {
-		return result
-	}
-	result.Total, _ = strconv.ParseUint(fields[1], 10, 64)
-	result.Used, _ = strconv.ParseUint(fields[2], 10, 64)
-	result.Avail, _ = strconv.ParseUint(fields[3], 10, 64)
-	result.UsePct, _ = strconv.ParseUint(fields[4], 10, 64)
-
-	if result.Total > 0 {
-		result.FreePercent = 100.0 - float64(result.UsePct)
-	}
-	return result
-}
-
-type diskUsageInfo struct {
-	Total       uint64
-	Used        uint64
-	Avail       uint64
-	UsePct      uint64
-	FreePercent float64
-}
-
-func init() {
-	// init only once
 }

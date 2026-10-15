@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
 	"github.com/coma-toast/mcp-local/internal/mgr/jsonagent"
@@ -44,15 +45,21 @@ func BridgeCommand() string {
 	return exe
 }
 
+// managedKeys are rewritten on register; other keys (e.g. a user's "disabled") are kept.
+var managedKeys = []string{"type", "command", "args", "env"}
+
+// Agent edits this host's config file.
+func Agent() jsonagent.Agent { return newAgent() }
+
 func newAgent() jsonagent.Agent {
-	return jsonagent.New(ConfigPath(), "mcpServers", entryToClaude)
+	return jsonagent.New(ConfigPath(), "mcpServers", entryToClaude, managedKeys...)
 }
 
 func entryToClaude(entry config.AgentEntry) map[string]interface{} {
 	if entry.Type == "remote" {
 		return map[string]interface{}{
 			"command": BridgeCommand(),
-			"args":    []string{"bridge", entry.URL},
+			"args":    BridgeArgs(entry.URL, entry.Headers),
 		}
 	}
 	obj := map[string]interface{}{
@@ -66,6 +73,20 @@ func entryToClaude(entry config.AgentEntry) map[string]interface{} {
 		obj["env"] = entry.Environment
 	}
 	return obj
+}
+
+// BridgeArgs are the `mcp-local bridge` arguments for url, one --header per header (sorted).
+func BridgeArgs(url string, headers map[string]string) []string {
+	args := []string{"bridge", url}
+	keys := make([]string, 0, len(headers))
+	for k := range headers {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		args = append(args, "--header", k+"="+headers[k])
+	}
+	return args
 }
 
 func RegisterServices(services []config.ServiceConfig) error {

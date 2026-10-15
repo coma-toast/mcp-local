@@ -2,8 +2,7 @@ package runtime
 
 import (
 	"fmt"
-	"os"
-	"syscall"
+	"path/filepath"
 
 	"github.com/coma-toast/mcp-local/internal/mgr/config"
 	"github.com/coma-toast/mcp-local/internal/mgr/process"
@@ -18,141 +17,109 @@ type ServiceStatus struct {
 	PID     int
 	Port    int
 	Uptime  string
+	Mode    process.Mode
+	// Stale is set when a PID file exists but no longer names the process mcp-local
+	// started. Status is read-only, so the file is left for stop or doctor --fix.
+	Stale bool
+	// Orphan is an untracked copy of the service's own binary holding one of its ports
+	// while the main port is down: start replaces it and doctor --fix stops it.
+	Orphan Holder
 }
 
+// IsPIDAlive reports whether pid exists; EPERM (another user's process) counts as alive.
 func IsPIDAlive(pid int) bool {
-	if pid <= 0 {
-		return false
+	return pid > 0 && process.Alive(pid)
+}
+
+// Holder is the process listening on one of a service's ports.
+type Holder struct {
+	Port int
+	PID  int
+	Exe  string
+	Same bool // runs the service's own binary
+}
+
+// Lookups used by CheckStatus; variables so tests can fake them.
+var (
+	portListening = portutil.IsRunning
+	portOwner     = portutil.FindPID
+	procInfo      = process.ProcInfo
+	fetchHealth   = portutil.FetchHealth
+)
+
+// HolderOf reports who listens on port, or ok=false when nothing does.
+func HolderOf(svc config.ServiceConfig, port int) (Holder, bool) {
+	if port <= 0 || !portListening(port) {
+		return Holder{}, false
 	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
+	h := Holder{Port: port, PID: portOwner(port)}
+	if h.PID > 0 {
+		if _, exe, err := procInfo(h.PID); err == nil {
+			h.Exe = exe
+			h.Same = process.SameBinary(exe, process.ExpectedExe(svc))
+		}
 	}
-	return proc.Signal(syscall.Signal(0)) == nil
+	return h, true
 }
 
 func CheckStatus(svc config.ServiceConfig) ServiceStatus {
-	status := ServiceStatus{
-		Name:   svc.Name,
-		Port:   svc.Port,
-		State:  config.StateStopped,
-		Detail: "",
-	}
-
-	ownedPorts := svc.OwnedPorts()
-	if len(ownedPorts) == 0 && svc.Command == "" && svc.MCPURL == "" {
-		return status
-	}
-
-	// 1. Check tracked PID file first
-	var trackedPID int
-	if pid, err := process.LoadPID(svc.Name); err == nil && IsPIDAlive(pid) {
-		trackedPID = pid
-	} else if err == nil {
-		_ = process.RemovePID(svc.Name)
-	}
-
-	// 2. Check main port status
-	mainPortRunning := svc.Port > 0 && portutil.IsRunning(svc.Port)
-	var mainPortPID int
-	if mainPortRunning {
-		mainPortPID = portutil.FindPID(svc.Port)
-	}
-
-	// If main port is running
-	if mainPortRunning {
-		pid := mainPortPID
-		if pid == 0 {
-			pid = trackedPID
+	st := ServiceStatus{Name: svc.Name, Port: svc.Port, Mode: process.ModeOf(svc), State: config.StateStopped, Detail: "stopped"}
+	if h, ok := HolderOf(svc, svc.Port); ok {
+		st.setPID(h.PID)
+		st.Running, st.State, st.Detail = true, config.StateRunning, "healthy"
+		if healthy, why := fetchHealth(svc.HealthURL); !healthy {
+			st.State, st.Detail = config.StateDegraded, why
 		}
-		status.PID = pid
-		if pid > 0 {
-			status.Uptime = portutil.GetUptime(pid)
-		}
-
-		// Check health URL if configured
-		if svc.HealthURL != "" {
-			healthy, healthDetail := portutil.FetchHealth(svc.HealthURL)
-			if !healthy {
-				status.State = config.StateDegraded
-				status.Running = true
-				status.Detail = healthDetail
-				return status
+		return st
+	}
+	if id, err := process.LoadIdentity(svc.Name); err == nil {
+		if id.Check(process.ExpectedExe(svc)) == process.Match {
+			st.setPID(id.PID)
+			if svc.Port <= 0 {
+				st.Running, st.State, st.Detail = true, config.StateRunning, "running"
+				return st
 			}
+			// Possibly still starting up, so only restart (explicit) replaces it.
+			st.State = config.StateDegraded
+			st.Detail = fmt.Sprintf("process alive (pid %d) but port %d not listening", id.PID, svc.Port)
+			return st
 		}
-
-		status.State = config.StateRunning
-		status.Running = true
-		status.Detail = "healthy"
-		return status
+		st.Stale, st.State = true, config.StateStale
+		st.Detail = fmt.Sprintf("PID file names pid %d, which is not the process mcp-local started", id.PID)
 	}
-
-	// If main port is not running, but we have a tracked PID or any owned port is running
-	anyPortRunning := false
-	var runningPort int
-	var runningPortPID int
-	for _, p := range ownedPorts {
-		if portutil.IsRunning(p) {
-			anyPortRunning = true
-			runningPort = p
-			runningPortPID = portutil.FindPID(p)
-			break
+	for _, p := range svc.OwnedPorts() {
+		if p == svc.Port {
+			continue
 		}
-	}
-
-	if trackedPID > 0 || anyPortRunning {
-		pid := trackedPID
-		if pid == 0 {
-			pid = runningPortPID
+		h, ok := HolderOf(svc, p)
+		if !ok {
+			continue
 		}
-		status.PID = pid
-		if pid > 0 {
-			status.Uptime = portutil.GetUptime(pid)
-		}
-		status.Running = true
-
-		// Check if it's same binary or conflict
-		if pid > 0 && portutil.IsSameBinary(pid, svc.Command) {
-			status.State = config.StateDegraded
-			if runningPort > 0 && runningPort != svc.Port {
-				status.Detail = fmt.Sprintf("main port %d not listening, but auxiliary port %d is held by PID %d", svc.Port, runningPort, pid)
-			} else {
-				status.Detail = fmt.Sprintf("process alive (PID %d) but main port %d not listening", pid, svc.Port)
-			}
-		} else if pid > 0 {
-			cmdName := portutil.GetCommandForPID(pid)
-			status.State = config.StateConflict
-			status.Detail = fmt.Sprintf("port %d held by different process %q (PID %d)", svc.Port, cmdName, pid)
+		st.setPID(h.PID)
+		if h.Same {
+			st.Orphan, st.State = h, config.StateOrphaned
+			st.Detail = fmt.Sprintf("port %d held by an untracked %s (pid %d) while port %d is down", p, describeExe(h.Exe), h.PID, svc.Port)
 		} else {
-			status.State = config.StateDegraded
-			status.Detail = "service process is not responding on main port"
+			st.State = config.StateConflict
+			st.Detail = fmt.Sprintf("port %d held by another program, %s (pid %d)", p, describeExe(h.Exe), h.PID)
 		}
-		return status
+		return st
 	}
+	return st
+}
 
-	// Check if any owned port is held by an untracked process
-	for _, p := range ownedPorts {
-		if portutil.IsRunning(p) {
-			pid := portutil.FindPID(p)
-			if pid > 0 {
-				status.PID = pid
-				status.Uptime = portutil.GetUptime(pid)
-				if portutil.IsSameBinary(pid, svc.Command) {
-					status.State = config.StateOrphaned
-					status.Detail = fmt.Sprintf("owned port %d held by untracked instance of same binary (PID %d)", p, pid)
-				} else {
-					cmdName := portutil.GetCommandForPID(pid)
-					status.State = config.StateConflict
-					status.Detail = fmt.Sprintf("port %d held by different program %q (PID %d)", p, cmdName, pid)
-				}
-				return status
-			}
-		}
+func (st *ServiceStatus) setPID(pid int) {
+	st.PID = pid
+	if pid > 0 {
+		st.Uptime = portutil.GetUptime(pid)
 	}
+}
 
-	status.State = config.StateStopped
-	status.Detail = "stopped"
-	return status
+func describeExe(exe string) string {
+	if exe == "" {
+		return "an unknown program"
+	}
+	return filepath.Base(exe)
 }
 
 func CheckAll(cfg *config.ManagerConfig, filter string) []ServiceStatus {

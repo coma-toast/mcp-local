@@ -115,7 +115,7 @@ func (l *lineBuffer) Lines() []string {
 
 func (l *lineBuffer) waitFor(t *testing.T, substr string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(20 * time.Second) // generous: only a failing test waits this long
 	for time.Now().Before(deadline) {
 		for _, line := range l.Lines() {
 			if strings.Contains(line, substr) {
@@ -276,12 +276,12 @@ func TestBridge_UnreachableServer(t *testing.T) {
 }
 
 func TestParseSSE(t *testing.T) {
-	in := "retry: 10\r\n: comment\r\nid: 5\r\nevent: message\r\ndata: a\r\ndata:b\r\n\r\ndata: tail"
+	in := "retry: 10\r\n: comment\r\nid: 5\r\nevent: message\r\ndata: a\r\ndata:b\r\n\r\nid: 6\n\nretry: x\n\ndata: tail"
 	var got []Event
 	if err := ParseSSE(strings.NewReader(in), func(e Event) error { got = append(got, e); return nil }); err != nil {
 		t.Fatal(err)
 	}
-	want := []Event{{Type: "message", ID: "5", Data: "a\nb"}, {Data: "tail"}}
+	want := []Event{{Type: "message", ID: "5", Data: "a\nb", Retry: 10 * time.Millisecond}, {ID: "6"}, {Data: "tail"}}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("events = %+v, want %+v", got, want)
 	}
