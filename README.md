@@ -116,6 +116,16 @@ make install INSTALL_DIR=~/.local/bin   # or: make install PREFIX=~/.local
 
 `make install` copies `bin/mcp-local` to `$(INSTALL_DIR)` (default `$(PREFIX)/bin`, `PREFIX ?= /usr/local`) and creates the directory if needed. Where `/usr/local/bin` isn't writable, use `INSTALL_DIR=~/.local/bin` (or `PREFIX=~/.local`) as above; otherwise run `sudo make install`. You can also skip installing and add `./bin` to your PATH.
 
+### Updating
+
+```bash
+mcp-local update --check   # compare this binary with the latest release
+mcp-local update           # download, verify against checksums.txt, replace this binary
+mcp-local update --version v0.1.8 --force   # pin, reinstall or downgrade
+```
+
+`update` replaces the file the running `mcp-local` resolves to (symlinks are followed), so run it with `sudo` if that directory isn't yours. `make build` stamps the version from `git describe` (e.g. `0.1.8-3-gabc1234`), so a source build is only offered releases newer than its tag; a plain `go build` reports `dev` and needs `--force`. Set `GH_TOKEN` or `GITHUB_TOKEN` if you hit GitHub's anonymous rate limit.
+
 ### Configuration
 Create `~/.mcp-local/config.yaml` or copy the starter:
 ```bash
