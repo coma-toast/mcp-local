@@ -199,8 +199,12 @@ mcp-local registered my-server
 ```bash
 make          # ./bin/mcp-local
 make test
-make check    # test + vet + fmt
+make check    # test + vet + gofmt -l (fails on unformatted code, rewrites nothing)
+make fmt      # gofmt -w
+make install INSTALL_DIR=~/.local/bin   # default $(PREFIX)/bin, PREFIX ?= /usr/local; creates the dir
 ```
+
+The Makefile exports `GOWORK=off`, so run `go` commands outside make with `GOWORK=off` too if a parent directory has a `go.work`.
 
 Layout:
 

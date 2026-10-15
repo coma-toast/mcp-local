@@ -24,7 +24,7 @@ When building an advanced AI agent setup, you often end up with a fragmented eco
 - `mcp-local status` — bubbletea live table; `mcp-local status --plain` for scripting.
 - `mcp-local health <service>` — GET `health_url` for service(s).
 - `mcp-local logs` — tail unified logs for all services (Ctrl+C to stop).
-- `mcp-local log <service>` — tail individual service log.
+- `mcp-local log <service>` — tail individual service log. Both tails start at the end of the file, wait for a missing log to appear, and follow truncation and rotation.
 - stdio services are registered only: each agent launches its own copy, so `start` never daemonizes them (`status` shows `on-demand`).
 - `stop` stops the whole process group, verifies the process by PID + start time before signalling, and fails unless the port ends up free. `start`/`stop`/`restart`/`health` exit non-zero on any failure; `restart` builds before stopping.
 - Supports **remote-only** services (no local binary, just `mcp_url`).
@@ -110,11 +110,10 @@ git clone https://github.com/coma-toast/mcp-local.git
 cd mcp-local
 make          # writes ./bin/mcp-local
 make test     # run unit tests
-# Optional: install system-wide
-# sudo make install
+make install INSTALL_DIR=~/.local/bin   # or: make install PREFIX=~/.local
 ```
 
-Add `./bin` to your PATH.
+`make install` copies `bin/mcp-local` to `$(INSTALL_DIR)` (default `$(PREFIX)/bin`, `PREFIX ?= /usr/local`) and creates the directory if needed. Where `/usr/local/bin` isn't writable, use `INSTALL_DIR=~/.local/bin` (or `PREFIX=~/.local`) as above; otherwise run `sudo make install`. You can also skip installing and add `./bin` to your PATH.
 
 ### Configuration
 Create `~/.mcp-local/config.yaml` or copy the starter:
@@ -248,16 +247,14 @@ mcp-local json tools ast-context-cache   # Preview tools.json overrides
 ```bash
 make        # build
 make test   # run tests
-make check  # test + vet + fmt (fails on unformatted code without rewriting)
+make check  # test + vet + gofmt -l (fails on unformatted code, rewrites nothing)
 make fmt    # fix formatting with gofmt -w .
+make install INSTALL_DIR=~/.local/bin   # see Installation for PREFIX / sudo
 ```
 
-Install the binary with a custom `INSTALL_DIR`:
+The Makefile exports `GOWORK=off`, so a `go.work` in a parent directory (e.g. `~/git/go.work`) can't break the build.
 
-```bash
-make install      # installs to /usr/local/bin (default)
-make install INSTALL_DIR=$(mktemp -d)  # installs to a temp directory
-```
+CI runs `gofmt -l`, `go vet`, `go test -race`, staticcheck and `go build` on push and PR.
 
 ## License
 

@@ -175,32 +175,10 @@ func cmdLog() *cobra.Command {
 				return err
 			}
 			logPath := process.LogPath(svc)
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
 			fmt.Printf("==> %s <==\n", logPath)
-			for {
-				f, err := os.Open(logPath)
-				if err != nil {
-					time.Sleep(200 * time.Millisecond)
-					continue
-				}
-				_, _ = f.Seek(0, io.SeekEnd)
-				reader := bufio.NewReader(f)
-				for {
-					line, err := reader.ReadString('\n')
-					if line != "" {
-						fmt.Print(line)
-					}
-					if err == io.EOF {
-						_ = f.Close()
-						time.Sleep(200 * time.Millisecond)
-						break
-					}
-					if err != nil {
-						_ = f.Close()
-						time.Sleep(200 * time.Millisecond)
-						break
-					}
-				}
-			}
+			return logs.Follower{Path: logPath, Out: os.Stdout, Err: os.Stderr}.Run(ctx)
 		},
 	}
 }
@@ -814,15 +792,10 @@ func cmdLogsUnified() *cobra.Command {
 				}
 				entries = append(entries, logs.Entry{Name: name, Path: process.LogPath(svc)})
 			}
-			stop := make(chan struct{})
-			go func() {
-				sigChan := make(chan os.Signal, 1)
-				signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-				<-sigChan
-				close(stop)
-			}()
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
 			fmt.Println("Tailing logs (Press Ctrl+C to stop)...")
-			logs.StreamLogs(entries, stop)
+			logs.StreamLogs(ctx, entries, os.Stdout, os.Stderr)
 		},
 	}
 }
