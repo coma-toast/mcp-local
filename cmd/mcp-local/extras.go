@@ -350,12 +350,8 @@ func cmdAdd() *cobra.Command {
 				}
 				if svc.Log == "" && svc.Command != "" {
 					suggested := process.LogPath(config.ServiceConfig{Name: name})
-					val := prompt(fmt.Sprintf("Log path [%s]: ", suggested))
-					if strings.TrimSpace(val) == "" {
-						svc.Log = suggested
-					} else {
-						svc.Log = strings.TrimSpace(val)
-					}
+					// Empty keeps the default, resolved per machine, out of the (often shared) config.
+					svc.Log = strings.TrimSpace(prompt(fmt.Sprintf("Log path [%s]: ", suggested)))
 				}
 			}
 			if svc.MCPType == "filesystem" && strings.TrimSpace(svc.Path) == "" {
