@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -67,6 +68,7 @@ type model struct {
 	filter   string
 	rows     []row
 	quitting bool
+	width    int // terminal width from tea.WindowSizeMsg; 0 until reported
 }
 
 func newModel(cfg *config.ManagerConfig, filter string) model {
@@ -111,6 +113,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 		}
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
 	case tickMsg:
 		return m, tea.Batch(m.refresh(), tick())
 	case []row:
@@ -123,10 +127,19 @@ func (m model) View() string {
 	if m.quitting {
 		return ""
 	}
-	colName, colStatus, colPID, colPort, colUptime := 24, 13, 8, 7, 12
-	header := fmt.Sprintf("%-*s %-*s %-*s %-*s %-*s %s",
-		colName, "NAME", colStatus, "STATUS", colPID, "PID", colPort, "PORT", colUptime, "UPTIME", "DETAIL")
-	out := headerStyle.Render(header) + "\n"
+	cols := fitColumns(m.rows, m.width)
+	header := pad("NAME", cols.name) + " " + pad("STATUS", cols.status)
+	if cols.pid {
+		header += " " + pad("PID", colPID)
+	}
+	header += " " + pad("PORT", colPort)
+	if cols.uptime {
+		header += " " + pad("UPTIME", colUptime)
+	}
+	if m.width <= 0 || lipgloss.Width(header)+len(" DETAIL") <= m.width {
+		header += " DETAIL"
+	}
+	out := headerStyle.Render(strings.TrimRight(header, " ")) + "\n"
 	for _, r := range m.rows {
 		style := stoppedStyle
 		switch r.label() {
@@ -139,16 +152,162 @@ func (m model) View() string {
 		case "remote", "on-demand":
 			style = dimStyle
 		}
-		statusStr := style.Render(fmt.Sprintf("%-*s", colStatus, r.label()))
-		pidStr := dimStyle.Render(fmt.Sprintf("%-*s", colPID, "-"))
-		if r.pid > 0 {
-			pidStr = fmt.Sprintf("%-*d", colPID, r.pid)
+		line := pad(cut(r.name, cols.name), cols.name) + " " + style.Render(pad(r.label(), cols.status))
+		used := cols.name + 1 + cols.status
+		if cols.pid {
+			if r.pid > 0 {
+				line += " " + pad(strconv.Itoa(r.pid), colPID)
+			} else {
+				line += " " + dimStyle.Render(pad("-", colPID))
+			}
+			used += 1 + colPID
 		}
-		out += fmt.Sprintf("%-*s %s %s %-*d %-*s %s\n",
-			colName, r.name, statusStr, pidStr, colPort, r.port, colUptime, r.uptime, dimStyle.Render(r.detailText()))
+		if r.port > 0 {
+			line += " " + pad(strconv.Itoa(r.port), colPort)
+		} else {
+			line += " " + dimStyle.Render(pad("-", colPort))
+		}
+		used += 1 + colPort
+		if cols.uptime {
+			up := ""
+			if r.running {
+				up = humanUptime(r.uptime)
+			}
+			line += " " + pad(up, colUptime)
+			used += 1 + colUptime
+		}
+		if d := r.detailText(); d != "" {
+			if m.width > 0 {
+				d = cut(d, m.width-used-1)
+			}
+			if d != "" {
+				line += " " + dimStyle.Render(d)
+			}
+		}
+		out += strings.TrimRight(line, " ") + "\n"
 	}
 	out += dimStyle.Render("\nPress q to quit")
 	return out
+}
+
+const colPID, colPort, colUptime = 7, 5, 8
+
+type columns struct {
+	name, status int
+	pid, uptime  bool
+}
+
+// fitColumns sizes NAME and STATUS to their widest values (NAME max 32) and,
+// when the terminal is too narrow, drops UPTIME then PID; NAME is cut last.
+// DETAIL takes whatever is left. width 0 = unknown: keep everything.
+func fitColumns(rows []row, width int) columns {
+	c := columns{name: len("NAME"), status: len("STATUS"), pid: true, uptime: true}
+	for _, r := range rows {
+		if len(r.name) > c.name {
+			c.name = len(r.name)
+		}
+		if l := len(r.label()); l > c.status {
+			c.status = l
+		}
+	}
+	if c.name > 32 {
+		c.name = 32
+	}
+	if width <= 0 {
+		return c
+	}
+	total := func() int {
+		t := c.name + 1 + c.status + 1 + colPort
+		if c.pid {
+			t += 1 + colPID
+		}
+		if c.uptime {
+			t += 1 + colUptime
+		}
+		return t
+	}
+	if total() > width {
+		c.uptime = false
+	}
+	if total() > width {
+		c.pid = false
+	}
+	if over := total() - width; over > 0 && c.name-over >= 8 {
+		c.name -= over
+	}
+	return c
+}
+
+func pad(s string, width int) string {
+	if n := len([]rune(s)); n < width {
+		return s + strings.Repeat(" ", width-n)
+	}
+	return s
+}
+
+// cut shortens s to width runes, ending in "…" when it had to cut.
+func cut(s string, width int) string {
+	r := []rune(s)
+	if width <= 0 {
+		return ""
+	}
+	if len(r) <= width {
+		return s
+	}
+	if width < 2 {
+		return string(r[:width])
+	}
+	return string(r[:width-1]) + "…"
+}
+
+// humanUptime turns ps elapsed time ("[[dd-]hh:]mm:ss" on macOS, plain seconds
+// on Linux) into "6d 2h", "3h 5m", "12m" or "40s"; anything else is returned as is.
+func humanUptime(s string) string {
+	s = strings.TrimSpace(s)
+	secs, ok := elapsedSeconds(s)
+	if !ok {
+		return s
+	}
+	d, h, m := secs/86400, secs%86400/3600, secs%3600/60
+	switch {
+	case d > 0:
+		return fmt.Sprintf("%dd %dh", d, h)
+	case h > 0:
+		return fmt.Sprintf("%dh %dm", h, m)
+	case m > 0:
+		return fmt.Sprintf("%dm", m)
+	}
+	return fmt.Sprintf("%ds", secs)
+}
+
+func elapsedSeconds(s string) (int, bool) {
+	if s == "" {
+		return 0, false
+	}
+	if n, err := strconv.Atoi(s); err == nil {
+		return n, n >= 0
+	}
+	days := 0
+	if i := strings.Index(s, "-"); i > 0 {
+		d, err := strconv.Atoi(s[:i])
+		if err != nil {
+			return 0, false
+		}
+		days, s = d, s[i+1:]
+	}
+	parts := strings.Split(s, ":")
+	if len(parts) < 2 || len(parts) > 3 {
+		return 0, false
+	}
+	total := 0
+	for _, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return 0, false
+		}
+		total = total*60 + n
+	}
+	return days*86400 + total, true
 }
 
 // Run starts the bubbletea status UI.
