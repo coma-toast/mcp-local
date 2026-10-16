@@ -151,6 +151,7 @@ mcp-local logs                   # tail all (Ctrl+C)
 mcp-local open <service>         # dashboard_url in browser
 mcp-local doctor                 # diagnose all services (orphaned ports, degraded health, port conflicts, stale PID files, agent registration)
 mcp-local doctor my-server --fix # stop untracked copies of its own binary, drop stale PID files, restart if degraded, re-register; never stops other programs; exit 1 while problems remain
+mcp-local update --check         # is a newer release out? (`mcp-local update` installs it, verified against checksums.txt)
 ```
 
 - **Status states**: `running`, `degraded` (health check failed), `orphaned` (same binary on port, not managed), `port conflict` (different program on port), `stopped`.

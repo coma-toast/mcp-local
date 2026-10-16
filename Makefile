@@ -3,6 +3,10 @@ BINDIR := bin
 BIN := $(BINDIR)/$(BINARY)
 PREFIX ?= /usr/local
 INSTALL_DIR ?= $(PREFIX)/bin
+# Version stamped into the binary so `mcp-local update` can compare it with releases:
+# "0.1.8" on a release tag, "0.1.8-3-gabc1234[-dirty]" after it, "dev" outside git.
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//')
+LDFLAGS := -X main.version=$(or $(VERSION),dev)
 
 # GOWORK=off: this repo is not part of any go.work workspace, but Go's workspace
 # auto-detection walks up from cwd, so a go.work in a parent directory (e.g. ~/git/go.work
@@ -13,7 +17,7 @@ export GOWORK := off
 
 all build:
 	mkdir -p $(BINDIR)
-	go build -o $(BIN) ./cmd/mcp-local
+	go build -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/mcp-local
 
 install: build
 	mkdir -p $(INSTALL_DIR)
