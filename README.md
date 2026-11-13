@@ -63,6 +63,10 @@ With no `agents:` key every host is enabled; with the key present, hosts set to 
 - On start: `AST_MCP_TIER`, optional `AST_MCP_CODE_MODE`, and `AST_MCP_TOOLS_CONFIG` when tools are configured.
 - **Restart** the service after changing tool settings (ast-mcp reads `tools.json` at startup only).
 
+### Control-Plane MCP Server (`mcp-local mcp`)
+- `mcp-local mcp` runs a newline-delimited JSON-RPC 2.0 stdio MCP server so AI agents can manage your local MCP stack directly.
+- Exposes 12 tools: `list_services`, `service_status`, `start_service`, `stop_service`, `restart_service`, `register_service`, `deregister_service`, `list_tools`, `sync_tools`, `configure_tools`, `add_service`, and `remove_service`.
+
 ### Embedded Filesystem MCP Server (`type: filesystem`)
 - Serves a local `path` over Streamable HTTP (`/mcp` and `/health`) bound to `127.0.0.1:<port>`.
 - Exposes 6 tools: `read_file`, `write_file`, `list_directory`, `search_files`, `get_file_info`, and `create_directory`.
@@ -100,6 +104,32 @@ While it can manage *any* binary, it is optimized for:
 - **Custom Servers**: Add any binary to `config.yaml`.
 
 ## Getting Started
+
+### One-Shot Setup for AI Agents & IDEs
+
+Install `mcp-local`, add its built-in `mcp` server, and integrate it with OpenCode, Cursor, and Claude Desktop in one task:
+
+```bash
+# 1. Build and install mcp-local (or download a release binary to ~/.local/bin/mcp-local)
+git clone https://github.com/coma-toast/mcp-local.git
+cd mcp-local
+make install INSTALL_DIR=~/.local/bin
+
+# 2. Initialize config.yaml if you don't have one yet
+mkdir -p ~/.mcp-local
+[ -f ~/.mcp-local/config.yaml ] || cp examples/config.starter.yaml ~/.mcp-local/config.yaml
+
+# 3. Register `mcp-local mcp` with all enabled agent IDEs (OpenCode, Cursor, Claude Desktop)
+~/.local/bin/mcp-local add mcp-local \
+  --type stdio \
+  --command "${HOME}/.local/bin/mcp-local" \
+  --args mcp \
+  --port 0 </dev/null
+~/.local/bin/mcp-local register mcp-local
+~/.local/bin/mcp-local registered mcp-local
+```
+
+For any other MCP-capable IDE or client (Antigravity, Windsurf, Zed, etc.), add a stdio MCP entry running `~/.local/bin/mcp-local mcp`.
 
 ### Installation
 
@@ -202,7 +232,8 @@ mcp-local logs                 # Tail all logs (Ctrl+C to stop)
 mcp-local log my-server        # Tail one service's log
 mcp-local open my-server       # Open dashboard in browser
 
-# Agent Registration
+# Agent Registration & Control-Plane MCP
+mcp-local mcp                               # Run mcp-local as a stdio MCP server
 mcp-local bridge http://localhost:7821/mcp  # stdio relay (what Claude Desktop runs)
 mcp-local register             # Register all services
 mcp-local register my-server   # Register one service

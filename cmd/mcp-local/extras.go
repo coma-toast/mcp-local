@@ -40,6 +40,7 @@ func addCommands() {
 	addLifecycle()
 	addDoctor()
 	addUpdate()
+	addMCP()
 
 	rootCmd.AddCommand(cmdList())
 
