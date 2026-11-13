@@ -1,125 +1,25 @@
 # mcp-local
 
-`mcp-local` is a unified local control plane for managing Model Context Protocol (MCP) servers. Instead of managing multiple binaries, ports, and agent configurations manually, `mcp-local` provides a single point of control for your local AI infrastructure.
+`mcp-local` is a unified local control plane for Model Context Protocol (MCP) servers. Define your stdio, HTTP, remote, and embedded filesystem servers once in `~/.mcp-local/config.yaml`, and `mcp-local` handles process lifecycles, agent config syncing, and tool-tier overrides.
 
-## Why mcp-local?
+> **AI agents:** See [AGENTS.md](AGENTS.md) for command workflows, file paths, and `ast-context-cache` tier details.
 
-When building an advanced AI agent setup, you often end up with a fragmented ecosystem:
-- Multiple MCP servers running on different ports.
-- Complex environment variables (like `ONNXRUNTIME_LIB`) needed for specific binaries.
-- Manual updates to `opencode.jsonc` or `mcp.json` every time a server changes.
-- Difficulty syncing your "local AI stack" across multiple machines.
+---
 
-`mcp-local` solves this by treating your MCP infrastructure as code. You define your servers in a single portable config, and `mcp-local` handles the rest.
+## Quick Start (One-Shot Agent & IDE Setup)
 
-**AI agents:** See [AGENTS.md](AGENTS.md) for command workflows, paths, ast-context-cache tool tiers, and what not to edit manually.
-
-## Key Features
-
-### Unified Lifecycle Management
-- `mcp-local start <service>` or `mcp-local start --all` — launches and registers with OpenCode, Cursor, and Claude Desktop (configurable).
-- `mcp-local stop <service>` / `stop --all`, `restart <service>` / `restart --all`.
-- `mcp-local stop --deregister` (default) — removes agent entries when stopping.
-- `mcp-local rebuild <service>` — runs `build_command` (in the `command` directory, 10-minute timeout) and re-registers.
-- `mcp-local status [service]` — bubbletea live table with a DETAIL column (running, degraded, orphaned, port conflict, stale, stopped); `mcp-local status --plain` for scripting.
-- `mcp-local doctor [service] [--fix]` — diagnose untracked copies holding a service's ports, other programs on them, failing health, stale PID files, missing deps or registrations, and low disk space. Read-only unless `--fix`, which only stops copies of the service's own binary, removes stale PID files, restarts degraded services and re-registers; exits non-zero while problems remain. `start` also replaces an untracked copy of the service's binary and refuses to start when another program holds one of its ports.
-- `mcp-local health <service>` — GET `health_url` for service(s).
-- `mcp-local logs` — tail unified logs for all services (Ctrl+C to stop).
-- `mcp-local log <service>` — tail individual service log. Both tails start at the end of the file, wait for a missing log to appear, and follow truncation and rotation.
-- stdio services are registered only: each agent launches its own copy, so `start` never daemonizes them (`status` shows `on-demand`).
-- `stop` stops the whole process group, verifies the process by PID + start time before signalling, and fails unless the port ends up free. `start`/`stop`/`restart`/`health` exit non-zero on any failure; `restart` builds before stopping.
-- Supports **remote-only** services (no local binary, just `mcp_url`).
-- Supports **filesystem** embedded MCP server (`type: filesystem`).
-
-### Agent Registration
-On `start` / `restart` / `register`, services are registered with enabled agents:
-- **OpenCode**: `~/.config/opencode/opencode.jsonc` — HTTP as `remote`, stdio as `local`.
-- **Cursor**: `~/.cursor/mcp.json` — HTTP as `{ "url": "..." }`, stdio as `{ "command": "...", "args": [...], "env": {...} }`.
-- **Claude Desktop**: `claude_desktop_config.json` — stdio as `{ "type": "stdio", "command": "...", "args": [...], "env": {...} }`. Claude Desktop only launches stdio servers, so HTTP services are written as a bridge entry: `{ "command": "/abs/path/mcp-local", "args": ["bridge", "<mcp_url>"] }`.
-
-Only mcp-local's own entries are touched: files are edited as JSONC (comments, trailing commas, key order, formatting, a UTF-8 BOM and CRLF line endings survive), written atomically, and the original is backed up to `~/.mcp-local/backups/<YYYYMMDD-HHMMSS>/` (last 5 per file). Within an entry only the keys mcp-local manages are rewritten (`url`, `headers`, `command`, `args`, `env`/`environment`, `type`); your own keys such as OpenCode `enabled`/`timeout`, Claude Desktop `disabled` or Cursor `timeout` are kept. A file with a duplicated key is refused rather than edited. Names mcp-local writes are recorded in `~/.mcp-local/written-entries.json`. A failure on one agent does not stop the others; all errors are reported together and the command exits non-zero.
-
-**ast-context-cache:** a service named `ast-context-cache` whose `command` is an `ast-mcp` binary is registered by delegating to `ast-mcp install|uninstall --target <opencode|cursor|claude_desktop> --component mcp --yes --json --mcp-url <mcp_url>` (ast-mcp 4.0.0+). Older ast-mcp versions fall back to mcp-local's writers with a warning. Set `installer: native` on the service to always use mcp-local's writers. Other service names use mcp-local's writers (with a warning), since `ast-mcp install` always names its entry `ast-context-cache`.
-
-```yaml
-agents:
-  opencode: true
-  cursor: true
-  claude: true
-```
-
-With no `agents:` key every host is enabled; with the key present, hosts set to `false` (or left out) are skipped, so all `false` means none.
-
-### stdio ↔ HTTP Bridge
-- `mcp-local bridge <url>` — relays newline-delimited JSON-RPC on stdin/stdout to a Streamable HTTP MCP server (spec 2025-06-18): session id and protocol version headers, JSON and SSE responses, the server's GET notification stream, JSON-RPC errors for failed HTTP requests, session DELETE on stdin EOF. Logs go to stderr.
-- When the server forgets the session (HTTP 404, e.g. after `mcp-local restart`), the bridge replays the client's `initialize` and retries, so Claude Desktop keeps working. The GET stream reconnects with backoff and `Last-Event-ID`. On stdin EOF, in-flight calls get 2s, then are cancelled.
-- Flags: `--header key=value` (repeatable), `--timeout` (default `60s`): max wait for response headers, and max silence on a call's response stream. A long tool call that keeps streaming is not cut off. On timeout the server gets `notifications/cancelled`.
-
-### Tool & Tier Management (ast-context-cache)
-- `mcp-local tools sync <service>` — fetch tool list from a running MCP server via `tools/list` (the server's descriptions are not stored as overrides).
-- `mcp-local tools` — TUI to enable/disable tools, change tiers, edit descriptions. Press `s` to save; `q`, Esc or Ctrl+C quit without saving.
-- `mcp-local tools apply <service>` — merge overrides into `~/.astcache/tools.json` (or `tools_config_path`); entries for tools the config doesn't override (e.g. set in the ast dashboard) are kept, and the file is backed up and written atomically.
-- `mcp-local json tools <service>` — print the tools.json overrides that would be written.
-- On start: `AST_MCP_TIER`, optional `AST_MCP_CODE_MODE`, and `AST_MCP_TOOLS_CONFIG` when tools are configured.
-- **Restart** the service after changing tool settings (ast-mcp reads `tools.json` at startup only).
-
-### Control-Plane MCP Server (`mcp-local mcp`)
-- `mcp-local mcp` runs a newline-delimited JSON-RPC 2.0 stdio MCP server so AI agents can manage your local MCP stack directly.
-- Exposes 12 tools: `list_services`, `service_status`, `start_service`, `stop_service`, `restart_service`, `register_service`, `deregister_service`, `list_tools`, `sync_tools`, `configure_tools`, `add_service`, and `remove_service`.
-
-### Embedded Filesystem MCP Server (`type: filesystem`)
-- Serves a local `path` over Streamable HTTP (`/mcp` and `/health`) bound to `127.0.0.1:<port>`.
-- Exposes 6 tools: `read_file`, `write_file`, `list_directory`, `search_files`, `get_file_info`, and `create_directory`.
-- Security & resource limits: blocks non-localhost `Host`/`Origin` headers and non-`application/json` `POST`s (DNS-rebinding / cross-site protection), resolves symlinks so paths cannot escape `path`, and caps `/mcp` request bodies and `read_file` at 10 MiB and `search_files` at 1,000 matches.
-
-### Configuration Management
-- First-run **Config Wizard TUI** launches automatically when `~/.mcp-local/config.yaml` does not exist and stdin is a terminal.
-- `mcp-local add <name>` — add or update a service (interactive prompts for new services).
-- `mcp-local edit <service>` — TUI editor for service configuration (↑/↓/Tab move between fields, Enter saves, Esc cancels).
-- `mcp-local remove <service>` — deregister from agents, then remove from config (kept in config if any agent fails).
-- `mcp-local config` — open `~/.mcp-local/config.yaml` in `$EDITOR` / `$VISUAL` (supports flags like `code --wait`, defaults to `nano`).
-- `mcp-local validate` — validate configuration for common issues (missing binaries, deps, ports).
-- `mcp-local import` — import MCP configs from OpenCode, Cursor, or Claude Desktop (`--from opencode|cursor|claude`).
-- `mcp-local list` — list configured service names.
-
-### Monitoring & Debugging
-- `mcp-local open <service>` — open `dashboard_url` (`http://` or `https://`) in browser.
-- `mcp-local registered [service]` — show which agents each service is registered with.
-- `mcp-local deregister [service]` — remove entries mcp-local wrote for stopped HTTP services with a port (or force by name).
-- `mcp-local update` — self-update from GitHub releases (`--check`, `--version`, `--force`) with SHA-256 verification against `checksums.txt`.
-
-### Portable Configuration
-All settings in `~/.mcp-local/config.yaml`. Sync across machines via Dropbox, iCloud, or Git.
-
-## Supported Agents
-- **OpenCode**: Full integration with `opencode.jsonc` / `opencode.json`.
-- **Cursor**: Full integration with `~/.cursor/mcp.json`.
-- **Claude Desktop**: `claude_desktop_config.json`, with HTTP services via `mcp-local bridge`.
-- **Any MCP-compliant client**: Manages standard HTTP or stdio MCP servers.
-
-## Supported MCP Servers
-While it can manage *any* binary, it is optimized for:
-- **ast-context-cache**: Full lifecycle, tool tier env injection, and TUI management.
-- **model-proxy**: stdio registration (agents launch it on demand).
-- **Custom Servers**: Add any binary to `config.yaml`.
-
-## Getting Started
-
-### One-Shot Setup for AI Agents & IDEs
-
-Install `mcp-local`, add its built-in `mcp` server, and integrate it with OpenCode, Cursor, and Claude Desktop in one task:
+Install `mcp-local`, add its built-in `mcp` server, and integrate with OpenCode, Cursor, and Claude Desktop in one task:
 
 ```bash
-# 1. Build and install mcp-local (or download a release binary to ~/.local/bin/mcp-local)
-git clone https://github.com/coma-toast/mcp-local.git
-cd mcp-local
+# 1. Build and install (or grab a release tarball from GitHub Releases)
+git clone https://github.com/coma-toast/mcp-local.git && cd mcp-local
 make install INSTALL_DIR=~/.local/bin
 
-# 2. Initialize config.yaml if you don't have one yet
+# 2. Initialize config.yaml if missing
 mkdir -p ~/.mcp-local
 [ -f ~/.mcp-local/config.yaml ] || cp examples/config.starter.yaml ~/.mcp-local/config.yaml
 
-# 3. Register `mcp-local mcp` with all enabled agent IDEs (OpenCode, Cursor, Claude Desktop)
+# 3. Add and register `mcp-local mcp` across enabled agent IDEs
 ~/.local/bin/mcp-local add mcp-local \
   --type stdio \
   --command "${HOME}/.local/bin/mcp-local" \
@@ -129,52 +29,78 @@ mkdir -p ~/.mcp-local
 ~/.local/bin/mcp-local registered mcp-local
 ```
 
-For any other MCP-capable IDE or client (Antigravity, Windsurf, Zed, etc.), add a stdio MCP entry running `~/.local/bin/mcp-local mcp`.
+For any other MCP-capable IDE (Antigravity, Windsurf, Zed, etc.), point a stdio MCP entry at `~/.local/bin/mcp-local mcp`.
 
-### Installation
+<details>
+<summary>Alternative install options (release binary, custom prefix, source build)</summary>
 
-Every merge to `main` publishes a [GitHub release](https://github.com/coma-toast/mcp-local/releases) with binaries for macOS and Linux (amd64 and arm64) and a `checksums.txt`:
+- **Prebuilt binaries:** Every merge to `main` publishes macOS/Linux (`amd64`/`arm64`) tarballs + `checksums.txt` on [GitHub Releases](https://github.com/coma-toast/mcp-local/releases):
+  ```bash
+  tar -xzf mcp-local_<version>_darwin_arm64.tar.gz
+  install -m 0755 mcp-local ~/.local/bin/
+  ```
+- **Custom install path:** `make install PREFIX=~/.local` (default `/usr/local/bin`; use `sudo make install` if needed).
+- **Self-update:** `mcp-local update --check`, `mcp-local update` (verifies SHA-256 against `checksums.txt`), or `mcp-local update --version v0.1.9 --force`. Set `GH_TOKEN`/`GITHUB_TOKEN` if rate-limited.
+
+</details>
+
+---
+
+## Features
+
+- **Lifecycle & Diagnostics:** `start`, `stop` (`--deregister` default `true`, verifies PID + start time and process group), `restart` (builds before stopping), `rebuild` (runs in `command` dir, 10m timeout), `status` (TUI or `--plain`), `doctor [--fix]` (orphans, port conflicts, stale PIDs, missing deps/registrations, low disk), `health`, `log`/`logs`, `open` (`http`/`https` `dashboard_url`).
+- **Multi-Agent Registration:** Syncs **OpenCode** (`~/.config/opencode/opencode.jsonc`), **Cursor** (`~/.cursor/mcp.json`), and **Claude Desktop** (`claude_desktop_config.json`, via `mcp-local bridge` for HTTP). Preserves JSONC comments, trailing commas, key order, UTF-8 BOM, CRLF, and user keys; backs up originals to `~/.mcp-local/backups/` (last 5 kept); refuses files with duplicate keys. Delegates `ast-context-cache` (`ast-mcp` v4+) to `ast-mcp install|uninstall` unless `installer: native`.
+- **Control-Plane MCP (`mcp-local mcp`):** Exposes 12 tools over stdio JSON-RPC 2.0 so agents can manage your stack directly:
+  - *Services:* `list_services`, `service_status`, `start_service`, `stop_service`, `restart_service`, `add_service`, `remove_service`
+  - *Agents:* `register_service`, `deregister_service`
+  - *Tools:* `list_tools` (config or `live: true`), `sync_tools`, `configure_tools`
+- **stdio ↔ HTTP Bridge (`mcp-local bridge <url>`):** Spec `2025-06-18` relay with session/protocol headers, SSE + GET notification stream reconnect (`Last-Event-ID`), transparent `404` session re-initialization, `--header`, and idle `--timeout` (`60s` default).
+- **Embedded Filesystem MCP (`type: filesystem`):** Serves `path` over Streamable HTTP (`/mcp`, `/health`) bound to `127.0.0.1:<port>` with 6 tools (`read_file`, `write_file`, `list_directory`, `search_files`, `get_file_info`, `create_directory`). Enforces localhost `Host`/`Origin`, `application/json` `POST`s, symlink-safe path resolution, 10 MiB body/read caps, and a 1,000-match search cap.
+- **Tool & Tier Management (`ast-context-cache`):** `tools sync`, `tools` TUI, `tools apply` (`~/.astcache/tools.json`), `json tools`, plus `AST_MCP_TIER` / `AST_MCP_CODE_MODE` / `AST_MCP_TOOLS_CONFIG` injection on start (restart after changes).
+- **Config Management:** First-run setup wizard TUI, `add`, `edit` (TUI), `remove`, `config` (`$EDITOR`/`$VISUAL` with flag support), `validate`, `import --from opencode|cursor|claude`, `list`.
+
+---
+
+## Command Reference
 
 ```bash
-tar -xzf mcp-local_<version>_darwin_arm64.tar.gz
-install -m 0755 mcp-local ~/.local/bin/   # or any directory on your PATH
-mcp-local --version
+# Lifecycle & Monitoring
+mcp-local start [service | --all]           # Start & register with agents
+mcp-local stop [service | --all]            # Stop & deregister (--deregister=false to keep)
+mcp-local restart [service | --all]         # Build, stop, start, register
+mcp-local rebuild <service>                 # Run build_command & re-register
+mcp-local status [service] [--plain]        # Live TUI or one-shot table
+mcp-local doctor [service] [--fix]          # Diagnose & apply safe fixes
+mcp-local health [service]                  # Check health_url
+mcp-local log <service> | logs              # Tail one or all service logs
+mcp-local open <service>                    # Open dashboard_url in browser
+
+# Config & Registration
+mcp-local list | validate | config          # List, validate, or edit in $EDITOR
+mcp-local add <name> [flags]                # Add/update service
+mcp-local edit <service> | remove <service> # TUI editor or deregister & delete
+mcp-local import [--from opencode|cursor|claude]
+mcp-local register [service] [--dry-run]    # Sync entries to enabled agents
+mcp-local deregister [service]              # Remove entries mcp-local wrote
+mcp-local registered [service]              # Show registration status per agent
+
+# MCP, Bridge & Tools
+mcp-local mcp                               # Run control-plane stdio MCP server
+mcp-local bridge <url> [--header k=v] [--timeout 60s]
+mcp-local tools [sync|apply <service>]      # Tool tier TUI, sync, or write tools.json
+mcp-local json tools <service>              # Preview tools.json overrides
+mcp-local update [--check|--version vX.Y.Z|--force]
 ```
 
-Or build from source:
+---
 
-```bash
-git clone https://github.com/coma-toast/mcp-local.git
-cd mcp-local
-make          # writes ./bin/mcp-local
-make test     # run unit tests
-make install INSTALL_DIR=~/.local/bin   # or: make install PREFIX=~/.local
-```
+## Configuration (`~/.mcp-local/config.yaml`)
 
-`make install` copies `bin/mcp-local` to `$(INSTALL_DIR)` (default `$(PREFIX)/bin`, `PREFIX ?= /usr/local`) and creates the directory if needed. Where `/usr/local/bin` isn't writable, use `INSTALL_DIR=~/.local/bin` (or `PREFIX=~/.local`) as above; otherwise run `sudo make install`. You can also skip installing and add `./bin` to your PATH.
-
-### Updating
-
-```bash
-mcp-local update --check   # compare this binary with the latest release
-mcp-local update           # download, verify against checksums.txt, replace this binary
-mcp-local update --version v0.1.8 --force   # pin, reinstall or downgrade
-```
-
-`update` replaces the file the running `mcp-local` resolves to (symlinks are followed), so run it with `sudo` if that directory isn't yours. `make build` stamps the version from `git describe` (e.g. `0.1.8-3-gabc1234`), so a source build is only offered releases newer than its tag; a plain `go build` reports `dev` and needs `--force`. Set `GH_TOKEN` or `GITHUB_TOKEN` if you hit GitHub's anonymous rate limit.
-
-### Configuration
-Create `~/.mcp-local/config.yaml` or copy the starter:
-```bash
-mkdir -p ~/.mcp-local
-cp examples/config.starter.yaml ~/.mcp-local/config.yaml
-```
-
-Example config:
 ```yaml
-agents:
+agents: # omit to enable all; when present, only true hosts are managed
   opencode: true
   cursor: true
+  claude: true
 
 services:
   - name: ast-context-cache
@@ -184,26 +110,19 @@ services:
     mcp_url: http://localhost:7821/mcp
     health_url: http://localhost:7821/health
     dashboard_url: http://localhost:7830
-    log: ${HOME}/.mcp-local/ast-context-cache.log
     active_tier: complete
+    build_command: "make build"
     env:
       ONNXRUNTIME_LIB: /opt/homebrew/lib/libonnxruntime.dylib
-    build_command: "cd ${HOME}/git/ast-context-cache && make build"
-    no_build_on_start: false   # set true to skip build on start
-    deps:
-      - ${HOME}/git/ast-context-cache/model/model.onnx
 
   - name: model-proxy
     command: ${HOME}/git/model-proxy/bin/model-proxy
     type: stdio
-    args:
-      - --config
-      - ${HOME}/.config/model-proxy/config.yaml
+    args: ["--config", "${HOME}/.config/model-proxy/config.yaml"]
 
   - name: remote-api
     type: http
     mcp_url: https://api.example.com/mcp
-    health_url: https://api.example.com/health
 
   - name: my-files
     type: filesystem
@@ -211,110 +130,41 @@ services:
     port: 4000
 ```
 
-### Usage
-```bash
-# Lifecycle
-mcp-local start --all          # Start and register with all agents
-mcp-local stop --all           # Stop and deregister (default)
-mcp-local stop --all --deregister=false  # Stop without deregistering
-mcp-local restart my-server    # Restart a service
-mcp-local rebuild my-server    # Run build_command and re-register
-
-# Status & Monitoring
-mcp-local status [my-server]   # Live table (q to quit)
-mcp-local status --plain       # One-shot text output
-mcp-local doctor               # Diagnose all services
-mcp-local doctor my-server     # Diagnose one service
-mcp-local doctor --fix         # Diagnose and auto-fix issues
-mcp-local doctor my-server --fix
-mcp-local health my-server     # Health check one service
-mcp-local logs                 # Tail all logs (Ctrl+C to stop)
-mcp-local log my-server        # Tail one service's log
-mcp-local open my-server       # Open dashboard in browser
-
-# Agent Registration & Control-Plane MCP
-mcp-local mcp                               # Run mcp-local as a stdio MCP server
-mcp-local bridge http://localhost:7821/mcp  # stdio relay (what Claude Desktop runs)
-mcp-local register             # Register all services
-mcp-local register my-server   # Register one service
-mcp-local register --dry-run   # Preview what would be registered
-mcp-local deregister           # Remove entries for stopped services
-mcp-local deregister my-server # Force remove one service
-mcp-local registered           # Show registration status per agent
-
-# Configuration
-mcp-local list                 # List configured service names
-mcp-local add github --type stdio --command npx --args "-y" --args "@modelcontextprotocol/server-github" --env GITHUB_TOKEN=ghp_xxxx
-mcp-local add filesystem --type filesystem --path ~/projects --port 4000
-mcp-local edit my-server       # TUI editor
-mcp-local remove my-server     # Deregister and remove from config
-mcp-local config               # Edit config.yaml in $EDITOR
-mcp-local validate             # Validate config
-mcp-local import               # Import from all agents
-mcp-local import --from opencode
-
-# Tool & Tier Management (ast-context-cache)
-mcp-local tools sync ast-context-cache   # Fetch tools from running server
-mcp-local tools                          # Tool tier TUI
-mcp-local tools apply ast-context-cache  # Write tools.json overrides
-mcp-local json tools ast-context-cache   # Preview tools.json overrides
-
-# Self-Update & Version
-mcp-local update --check                 # Check for a newer GitHub release
-mcp-local update                         # Download, verify checksum, replace binary
-mcp-local --version                      # Print installed version
-```
-
-## Config Reference
+<details>
+<summary>All service config fields</summary>
 
 | Field | Description |
 |-------|-------------|
 | `name` | Service identifier |
-| `command` | Path to binary (supports `${HOME}` and `~/`) |
-| `args` | Command-line arguments |
-| `port` | TCP listen port (omit for stdio) |
 | `type` | `http`, `stdio`, or `filesystem` |
-| `mcp_url` | MCP endpoint URL for remote registration (a service with only `mcp_url` is HTTP) |
-| `headers` | HTTP headers for an HTTP service (Cursor/OpenCode `headers`, Claude Desktop `bridge --header`) |
-| `health_url` | HTTP health check endpoint |
-| `dashboard_url` | Web dashboard URL |
+| `command`, `args` | Binary path (supports `${HOME}`, `~/`) and arguments |
+| `port`, `extra_ports` | Primary TCP port and additional owned local ports |
+| `mcp_url`, `headers` | MCP endpoint URL and HTTP headers (`bridge --header` for Claude) |
+| `health_url`, `dashboard_url` | Health endpoint and web UI URL (`http`/`https`) |
 | `log` | Log file path (default `~/.mcp-local/logs/<name>.log`) |
-| `env` | Environment variables (key-value map) |
-| `build_command` | Shell command to build the service |
-| `no_build_on_start` | Skip build on `start` (default: false, i.e. build runs) |
-| `deps` | Required file paths (checked before start) |
+| `env`, `deps` | Environment variables and required file paths checked before start |
+| `build_command`, `no_build_on_start` | Shell build command (runs in `command` dir, 10m timeout) and skip flag |
+| `path` | Root directory for `type: filesystem` |
+| `active_tier`, `code_mode`, `no_code_mode` | Injected as `AST_MCP_TIER` and `AST_MCP_CODE_MODE` |
+| `tools_config_path`, `tools` | Path to `tools.json` (default `~/.astcache/tools.json`) and per-tool overrides |
+| `installer` | `ast-mcp` (default for `ast-mcp` binary) or `native` |
 | `description` | Human-readable description |
-| `active_tier` | Injected as `AST_MCP_TIER` env var |
-| `code_mode` | Injected as `AST_MCP_CODE_MODE=true` when true |
-| `no_code_mode` | Injected as `AST_MCP_CODE_MODE=false` when true |
-| `tools_config_path` | Path to tools overrides JSON (default `~/.astcache/tools.json`) |
-| `tools` | Per-tool overrides (name, enabled, tier, description; a missing `enabled` means enabled) → `tools.json` on start |
-| `path` | Filesystem root path (required when `type: filesystem`) |
-| `installer` | Who writes agent entries: `ast-mcp` (the default when `command` is an `ast-mcp` binary; delegates to `ast-mcp install`) or `native` (mcp-local's writers) |
-| `extra_ports` | Additional local TCP ports the service owns (e.g. an admin port), checked for orphans and conflicts alongside `port` and the localhost ports in `dashboard_url`/`health_url`/`mcp_url` |
 
-## Documentation
+</details>
 
-| Doc | Audience |
-|-----|----------|
-| [AGENTS.md](AGENTS.md) | AI coding assistants — commands, paths, workflows, limitations |
-| [docs/goal-alignment-plan.md](docs/goal-alignment-plan.md) | Implementation history and future catalog TUI |
-| [examples/](examples/) | Starter `config.yaml` and service snippets |
+---
 
-## Development
+## Development & Docs
 
 ```bash
-make        # build
-make test   # run tests
-make check  # test + vet + gofmt -l (fails on unformatted code, rewrites nothing)
-make fmt    # fix formatting with gofmt -w .
-make install INSTALL_DIR=~/.local/bin   # see Installation for PREFIX / sudo
+make          # build ./bin/mcp-local
+make check    # go test + go vet + gofmt -l
+make fmt      # gofmt -w .
 ```
 
-The Makefile exports `GOWORK=off`, so a `go.work` in a parent directory (e.g. `~/git/go.work`) can't break the build.
+`Makefile` sets `GOWORK=off` so parent `go.work` files don't affect builds. CI runs `gofmt`, `go vet`, `go test -race`, `staticcheck`, and `go build`.
 
-CI runs `gofmt -l`, `go vet`, `go test -race`, staticcheck and `go build` on push and PR.
-
-## License
-
-MIT
+- [AGENTS.md](AGENTS.md) — Agent workflow, paths, and limitations
+- [docs/goal-alignment-plan.md](docs/goal-alignment-plan.md) — Architecture history and future catalog TUI
+- [examples/](examples/) — Starter `config.yaml` and service snippets
+- **License:** MIT
