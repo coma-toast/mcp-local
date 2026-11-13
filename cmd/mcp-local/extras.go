@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -200,6 +201,9 @@ func cmdOpen() *cobra.Command {
 			if svc.DashboardURL == "" {
 				return fmt.Errorf("no dashboard_url configured for %s", args[0])
 			}
+			if err := validateDashboardURL(svc.DashboardURL); err != nil {
+				return err
+			}
 			opener := "xdg-open"
 			if runtime.GOOS == "darwin" {
 				opener = "open"
@@ -207,6 +211,17 @@ func cmdOpen() *cobra.Command {
 			return exec.Command(opener, svc.DashboardURL).Start()
 		},
 	}
+}
+
+func validateDashboardURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid dashboard_url %q: %w", raw, err)
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("invalid dashboard_url %q: must be an http or https URL", raw)
+	}
+	return nil
 }
 
 func cmdRebuild() *cobra.Command {
@@ -221,15 +236,10 @@ func cmdRebuild() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			b := config.EffectiveBuild(svc)
-			if b == "" {
+			if config.EffectiveBuild(svc) == "" {
 				return fmt.Errorf("no build_cmd configured for %s", args[0])
 			}
-			fmt.Printf("Rebuilding %s...\n", args[0])
-			c := exec.Command("sh", "-c", b)
-			c.Stdout = os.Stdout
-			c.Stderr = os.Stderr
-			if err := c.Run(); err != nil {
+			if err := process.Build(svc); err != nil {
 				return fmt.Errorf("rebuild failed: %w", err)
 			}
 			fmt.Printf("%s: rebuild complete\n", args[0])
@@ -411,16 +421,22 @@ func cmdConfigEdit() *cobra.Command {
 			if editor == "" {
 				editor = os.Getenv("VISUAL")
 			}
-			if editor == "" {
-				editor = "nano"
-			}
-			c := exec.Command(editor, p)
+			c := editorCommand(editor, p)
 			c.Stdin = os.Stdin
 			c.Stdout = os.Stdout
 			c.Stderr = os.Stderr
 			return c.Run()
 		},
 	}
+}
+
+func editorCommand(editor, path string) *exec.Cmd {
+	parts := strings.Fields(editor)
+	if len(parts) == 0 {
+		return exec.Command("nano", path)
+	}
+	args := append(parts[1:], path)
+	return exec.Command(parts[0], args...)
 }
 
 func cmdRemove() *cobra.Command {

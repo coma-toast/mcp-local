@@ -20,6 +20,8 @@ import (
 
 var protocolVersion = "2024-11-05"
 
+const maxRequestBodyBytes = 10 << 20 // 10 MiB
+
 type Server struct {
 	server  *http.Server
 	root    string // absolute, symlinks resolved
@@ -140,8 +142,15 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			writeError(w, nil, -32600, "Request body too large")
+			return
+		}
 		writeError(w, nil, -32700, "Parse error")
 		return
 	}
