@@ -2,6 +2,7 @@ package embedfs
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -204,5 +205,41 @@ func TestToolsInvalidArgs(t *testing.T) {
 		if _, err := toolHandler(name)(t.TempDir(), json.RawMessage(`[]`)); err == nil || !strings.Contains(err.Error(), "invalid args") {
 			t.Errorf("%s: err = %v, want invalid args", name, err)
 		}
+	}
+}
+
+func TestReadFile_TooLarge(t *testing.T) {
+	root := t.TempDir()
+	big := filepath.Join(root, "big.bin")
+	f, err := os.Create(big)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(maxReadFileBytes + 1); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	f.Close()
+
+	s := New(root)
+	_, errMsg := call(t, s, "read_file", map[string]string{"path": "big.bin"})
+	if !strings.Contains(errMsg, "exceeds") {
+		t.Errorf("errMsg = %q, want exceeds limit", errMsg)
+	}
+}
+
+func TestSearchFiles_MatchCap(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < maxSearchMatches+20; i++ {
+		mustWrite(t, filepath.Join(root, fmt.Sprintf("f-%04d.txt", i)), "")
+	}
+	s := New(root)
+	text, errMsg := call(t, s, "search_files", map[string]string{"pattern": "*.txt"})
+	if errMsg != "" {
+		t.Fatalf("search_files err = %q", errMsg)
+	}
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	if len(lines) != maxSearchMatches {
+		t.Errorf("got %d matches, want cap %d", len(lines), maxSearchMatches)
 	}
 }

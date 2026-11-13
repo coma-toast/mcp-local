@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+const (
+	maxReadFileBytes = 10 << 20 // 10 MiB
+	maxSearchMatches = 1000
+)
+
 type toolDef struct {
 	Name        string      `json:"name"`
 	Description string      `json:"description"`
@@ -143,6 +148,13 @@ func handleReadFile(root string, raw json.RawMessage) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	info, err := os.Stat(full)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", a.Path, err)
+	}
+	if info.Size() > maxReadFileBytes {
+		return "", fmt.Errorf("read %s: file exceeds %d bytes", a.Path, maxReadFileBytes)
+	}
 	data, err := os.ReadFile(full)
 	if err != nil {
 		return "", fmt.Errorf("read %s: %w", a.Path, err)
@@ -217,6 +229,9 @@ func handleSearchFiles(root string, raw json.RawMessage) (string, error) {
 		if matched {
 			rel, _ := filepath.Rel(root, path)
 			matches = append(matches, rel)
+			if len(matches) >= maxSearchMatches {
+				return fs.SkipAll
+			}
 		}
 		return nil
 	})

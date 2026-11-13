@@ -1,3 +1,5 @@
 /bin/
+/mcp-local
+/cmd/mcp-local/mcp-local
 .DS_Store
 /dist/

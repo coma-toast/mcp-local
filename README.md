@@ -20,8 +20,8 @@ When building an advanced AI agent setup, you often end up with a fragmented eco
 - `mcp-local start <service>` or `mcp-local start --all` — launches and registers with OpenCode, Cursor, and Claude Desktop (configurable).
 - `mcp-local stop <service>` / `stop --all`, `restart <service>` / `restart --all`.
 - `mcp-local stop --deregister` (default) — removes agent entries when stopping.
-- `mcp-local rebuild <service>` — runs `build_command` and re-registers.
-- `mcp-local status` — bubbletea live table with a DETAIL column (running, degraded, orphaned, port conflict, stale, stopped); `mcp-local status --plain` for scripting.
+- `mcp-local rebuild <service>` — runs `build_command` (in the `command` directory, 10-minute timeout) and re-registers.
+- `mcp-local status [service]` — bubbletea live table with a DETAIL column (running, degraded, orphaned, port conflict, stale, stopped); `mcp-local status --plain` for scripting.
 - `mcp-local doctor [service] [--fix]` — diagnose untracked copies holding a service's ports, other programs on them, failing health, stale PID files, missing deps or registrations, and low disk space. Read-only unless `--fix`, which only stops copies of the service's own binary, removes stale PID files, restarts degraded services and re-registers; exits non-zero while problems remain. `start` also replaces an untracked copy of the service's binary and refuses to start when another program holds one of its ports.
 - `mcp-local health <service>` — GET `health_url` for service(s).
 - `mcp-local logs` — tail unified logs for all services (Ctrl+C to stop).
@@ -63,19 +63,26 @@ With no `agents:` key every host is enabled; with the key present, hosts set to 
 - On start: `AST_MCP_TIER`, optional `AST_MCP_CODE_MODE`, and `AST_MCP_TOOLS_CONFIG` when tools are configured.
 - **Restart** the service after changing tool settings (ast-mcp reads `tools.json` at startup only).
 
+### Embedded Filesystem MCP Server (`type: filesystem`)
+- Serves a local `path` over Streamable HTTP (`/mcp` and `/health`) bound to `127.0.0.1:<port>`.
+- Exposes 6 tools: `read_file`, `write_file`, `list_directory`, `search_files`, `get_file_info`, and `create_directory`.
+- Security & resource limits: blocks non-localhost `Host`/`Origin` headers and non-`application/json` `POST`s (DNS-rebinding / cross-site protection), resolves symlinks so paths cannot escape `path`, and caps `/mcp` request bodies and `read_file` at 10 MiB and `search_files` at 1,000 matches.
+
 ### Configuration Management
+- First-run **Config Wizard TUI** launches automatically when `~/.mcp-local/config.yaml` does not exist and stdin is a terminal.
 - `mcp-local add <name>` — add or update a service (interactive prompts for new services).
 - `mcp-local edit <service>` — TUI editor for service configuration (↑/↓/Tab move between fields, Enter saves, Esc cancels).
 - `mcp-local remove <service>` — deregister from agents, then remove from config (kept in config if any agent fails).
-- `mcp-local config` — open `~/.mcp-local/config.yaml` in `$EDITOR`.
+- `mcp-local config` — open `~/.mcp-local/config.yaml` in `$EDITOR` / `$VISUAL` (supports flags like `code --wait`, defaults to `nano`).
 - `mcp-local validate` — validate configuration for common issues (missing binaries, deps, ports).
-- `mcp-local import` — import MCP configs from OpenCode, Cursor, or Claude Desktop.
+- `mcp-local import` — import MCP configs from OpenCode, Cursor, or Claude Desktop (`--from opencode|cursor|claude`).
 - `mcp-local list` — list configured service names.
 
 ### Monitoring & Debugging
-- `mcp-local open <service>` — open `dashboard_url` in browser.
+- `mcp-local open <service>` — open `dashboard_url` (`http://` or `https://`) in browser.
 - `mcp-local registered [service]` — show which agents each service is registered with.
 - `mcp-local deregister [service]` — remove entries mcp-local wrote for stopped HTTP services with a port (or force by name).
+- `mcp-local update` — self-update from GitHub releases (`--check`, `--version`, `--force`) with SHA-256 verification against `checksums.txt`.
 
 ### Portable Configuration
 All settings in `~/.mcp-local/config.yaml`. Sync across machines via Dropbox, iCloud, or Git.
@@ -184,7 +191,7 @@ mcp-local restart my-server    # Restart a service
 mcp-local rebuild my-server    # Run build_command and re-register
 
 # Status & Monitoring
-mcp-local status               # Live table (q to quit)
+mcp-local status [my-server]   # Live table (q to quit)
 mcp-local status --plain       # One-shot text output
 mcp-local doctor               # Diagnose all services
 mcp-local doctor my-server     # Diagnose one service
@@ -209,6 +216,7 @@ mcp-local list                 # List configured service names
 mcp-local add github --type stdio --command npx --args "-y" --args "@modelcontextprotocol/server-github" --env GITHUB_TOKEN=ghp_xxxx
 mcp-local add filesystem --type filesystem --path ~/projects --port 4000
 mcp-local edit my-server       # TUI editor
+mcp-local remove my-server     # Deregister and remove from config
 mcp-local config               # Edit config.yaml in $EDITOR
 mcp-local validate             # Validate config
 mcp-local import               # Import from all agents
@@ -219,6 +227,11 @@ mcp-local tools sync ast-context-cache   # Fetch tools from running server
 mcp-local tools                          # Tool tier TUI
 mcp-local tools apply ast-context-cache  # Write tools.json overrides
 mcp-local json tools ast-context-cache   # Preview tools.json overrides
+
+# Self-Update & Version
+mcp-local update --check                 # Check for a newer GitHub release
+mcp-local update                         # Download, verify checksum, replace binary
+mcp-local --version                      # Print installed version
 ```
 
 ## Config Reference

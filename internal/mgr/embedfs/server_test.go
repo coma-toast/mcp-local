@@ -198,3 +198,15 @@ func TestLogToPrivateAndNoFollow(t *testing.T) {
 		t.Fatalf("LogTo followed a symlink: victim = %q", b)
 	}
 }
+
+func TestHandleMCP_BodyTooLarge(t *testing.T) {
+	h := New(t.TempDir()).Handler()
+	oversized := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":"` + strings.Repeat("a", maxRequestBodyBytes) + `"}`
+	rec := post(h, oversized, nil)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusRequestEntityTooLarge)
+	}
+	if !strings.Contains(rec.Body.String(), "-32600") {
+		t.Errorf("body = %q, want JSON-RPC -32600", rec.Body.String())
+	}
+}

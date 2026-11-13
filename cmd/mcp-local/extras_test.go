@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -62,5 +63,73 @@ func TestIsRegisteredInFile_JSONC(t *testing.T) {
 	}
 	if !isRegisteredInFile(path, "svc") || isRegisteredInFile(path, "other") {
 		t.Error("JSONC config not parsed")
+	}
+}
+
+func TestValidateDashboardURL(t *testing.T) {
+	valid := []string{
+		"http://localhost:7830",
+		"https://example.com/dashboard",
+		"http://127.0.0.1:8080/ui?tab=1",
+	}
+	for _, u := range valid {
+		if err := validateDashboardURL(u); err != nil {
+			t.Errorf("validateDashboardURL(%q) = %v, want nil", u, err)
+		}
+	}
+	invalid := []string{
+		"",
+		"file:///etc/passwd",
+		"javascript:alert(1)",
+		"http://",
+		"://missing-scheme",
+	}
+	for _, u := range invalid {
+		if err := validateDashboardURL(u); err == nil {
+			t.Errorf("validateDashboardURL(%q) = nil, want error", u)
+		}
+	}
+}
+
+func TestEditorCommand(t *testing.T) {
+	tests := []struct {
+		editor string
+		want   []string
+	}{
+		{"", []string{"nano", "/tmp/config.yaml"}},
+		{"   ", []string{"nano", "/tmp/config.yaml"}},
+		{"vim", []string{"vim", "/tmp/config.yaml"}},
+		{"code --wait", []string{"code", "--wait", "/tmp/config.yaml"}},
+		{"nvim -u NONE", []string{"nvim", "-u", "NONE", "/tmp/config.yaml"}},
+	}
+	for _, tt := range tests {
+		cmd := editorCommand(tt.editor, "/tmp/config.yaml")
+		if !reflect.DeepEqual(cmd.Args, tt.want) {
+			t.Errorf("editorCommand(%q) args = %v, want %v", tt.editor, cmd.Args, tt.want)
+		}
+	}
+}
+
+func TestCmdRebuild_UsesCommandDir(t *testing.T) {
+	svcDir := filepath.Join(t.TempDir(), "svc")
+	if err := os.MkdirAll(svcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	binPath := filepath.Join(svcDir, "my-server")
+	if err := os.WriteFile(binPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfgYAML := fmt.Sprintf("agents:\n  opencode: false\n  cursor: false\n  claude: false\nservices:\n  - name: s1\n    command: %s\n    build_command: pwd > built.cwd\n", binPath)
+	tempHome(t, cfgYAML)
+
+	if _, err := runCmd(t, cmdRebuild(), "s1"); err != nil {
+		t.Fatalf("rebuild failed: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(svcDir, "built.cwd"))
+	if err != nil {
+		t.Fatalf("expected built.cwd in %s: %v", svcDir, err)
+	}
+	if filepath.Clean(string(got[:len(got)-1])) != filepath.Clean(svcDir) {
+		t.Errorf("build ran in %q, want %q", string(got), svcDir)
 	}
 }
