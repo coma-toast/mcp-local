@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestExpandPath(t *testing.T) {
@@ -212,5 +214,38 @@ func TestOwnedPorts(t *testing.T) {
 	}
 	if p := (ServiceConfig{MCPURL: "http://localhost/mcp"}).OwnedPorts(); len(p) != 0 {
 		t.Errorf("URL without a port: %v", p)
+	}
+}
+
+func TestPopularExampleConfigs(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("..", "..", "..", "examples", "popular", "*.service.yaml"))
+	if err != nil {
+		t.Fatalf("glob popular examples: %v", err)
+	}
+	if len(files) < 25 {
+		t.Fatalf("expected at least 25 popular example files, got %d", len(files))
+	}
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		var svcs []ServiceConfig
+		if err := yaml.Unmarshal(data, &svcs); err != nil {
+			t.Fatalf("parse %s: %v", f, err)
+		}
+		if len(svcs) != 1 {
+			t.Fatalf("%s: expected 1 service entry, got %d", f, len(svcs))
+		}
+		svc := svcs[0]
+		if svc.Name == "" {
+			t.Fatalf("%s: empty service name", f)
+		}
+		if svc.MCPType != "stdio" && svc.MCPType != "http" && svc.MCPType != "filesystem" {
+			t.Fatalf("%s: unexpected type %q", f, svc.MCPType)
+		}
+		if _, err := ServiceToEntry(svc); err != nil {
+			t.Fatalf("%s: ServiceToEntry failed: %v", f, err)
+		}
 	}
 }

@@ -61,6 +61,111 @@ For any other MCP-capable IDE (Antigravity, Windsurf, Zed, etc.), point a stdio 
 
 ---
 
+## Top 25 Popular MCP Tools (Copy-Paste 1-Liners)
+
+Copy any 1-liner below to add a popular MCP server to `~/.mcp-local/config.yaml`, then run `mcp-local register <name>` (or `mcp-local register` to sync all) for OpenCode, Cursor, and Claude Desktop. Full YAML templates and 5 bonus configs live in [examples/popular/](examples/popular/).
+
+> `</dev/null` skips interactive port/log prompts on `stdio` servers. Replace `YOUR_*` placeholders before registering.
+
+### Core, Filesystem & Reasoning
+
+```bash
+# 1. Filesystem — read/write/search allowed directories (or use built-in: mcp-local add my-files --type filesystem --path ~/projects --port 4000 --health http://localhost:4000/health)
+mcp-local add filesystem --type stdio --command npx --args -y --args @modelcontextprotocol/server-filesystem --args "${HOME}/projects" </dev/null
+
+# 2. GitHub — official remote MCP (OAuth; see examples/popular/github.service.yaml for PAT or Docker)
+mcp-local add github --type http --mcp-url https://api.githubcopilot.com/mcp/
+
+# 3. Git — status, diff, log, and repo tools (requires uv)
+mcp-local add git --type stdio --command uvx --args mcp-server-git </dev/null
+
+# 4. Sequential Thinking — structured step-by-step problem solving
+mcp-local add sequential-thinking --type stdio --command npx --args -y --args @modelcontextprotocol/server-sequential-thinking </dev/null
+
+# 5. Memory — persistent knowledge-graph memory across chats
+mcp-local add memory --type stdio --command npx --args -y --args @modelcontextprotocol/server-memory </dev/null
+
+# 6. Desktop Commander — terminal commands, processes, and file editing
+mcp-local add desktop-commander --type stdio --command npx --args -y --args @wonderwhy-er/desktop-commander </dev/null
+
+# 7. Time — current time and IANA timezone conversion (requires uv)
+mcp-local add time --type stdio --command uvx --args mcp-server-time </dev/null
+```
+
+### Browser Automation & DevTools
+
+```bash
+# 8. Playwright — browser automation via accessibility snapshots
+mcp-local add playwright --type stdio --command npx --args -y --args @playwright/mcp </dev/null
+
+# 9. Chrome DevTools — live Chrome console, network, DOM, and performance traces
+mcp-local add chrome-devtools --type stdio --command npx --args -y --args chrome-devtools-mcp </dev/null
+```
+
+### Search, Scraping & Live Docs
+
+```bash
+# 10. Context7 — up-to-date, version-specific library docs
+mcp-local add context7 --type stdio --command npx --args -y --args @upstash/context7-mcp </dev/null
+
+# 11. Fetch — fetch web pages as Markdown (requires uv)
+mcp-local add fetch --type stdio --command uvx --args mcp-server-fetch </dev/null
+
+# 12. Brave Search — web, local, image, news, and video search
+mcp-local add brave-search --type stdio --command npx --args -y --args @brave/brave-search-mcp-server --env BRAVE_API_KEY=YOUR_KEY </dev/null
+
+# 13. Firecrawl — scrape, crawl, map, and search web pages to Markdown
+mcp-local add firecrawl --type stdio --command npx --args -y --args firecrawl-mcp --env FIRECRAWL_API_KEY=YOUR_KEY </dev/null
+
+# 14. Tavily — AI-native web search, extraction, and crawling
+mcp-local add tavily --type stdio --command npx --args -y --args tavily-mcp --env TAVILY_API_KEY=YOUR_KEY </dev/null
+
+# 15. Exa — semantic web search and research (hosted Streamable HTTP)
+mcp-local add exa --type http --mcp-url https://mcp.exa.ai/mcp
+```
+
+### Databases & Backend
+
+```bash
+# 16. Postgres — schema inspection, explain plans, index tuning, read-only SQL (requires uv)
+mcp-local add postgres --type stdio --command uvx --args postgres-mcp --args --access-mode=restricted --env DATABASE_URI=postgresql://user:pass@localhost:5432/mydb </dev/null
+
+# 17. SQLite — query and inspect a local SQLite database (requires uv)
+mcp-local add sqlite --type stdio --command uvx --args mcp-server-sqlite --args --db-path --args "${HOME}/data.db" </dev/null
+
+# 18. Supabase — SQL queries, migrations, logs, and project management (OAuth)
+mcp-local add supabase --type http --mcp-url https://mcp.supabase.com/mcp
+```
+
+### Productivity, Design & Ops
+
+```bash
+# 19. Notion — workspace search and Markdown page read/edit (OAuth)
+mcp-local add notion --type http --mcp-url https://mcp.notion.com/mcp
+
+# 20. Linear — issues, projects, cycles, and teams (OAuth)
+mcp-local add linear --type http --mcp-url https://mcp.linear.app/mcp
+
+# 21. Sentry — issue triage, stack traces, and release analysis
+mcp-local add sentry --type stdio --command npx --args -y --args @sentry/mcp-server --env SENTRY_AUTH_TOKEN=YOUR_TOKEN </dev/null
+
+# 22. Slack — workspace channels, messages, threads, and reactions
+mcp-local add slack --type stdio --command npx --args -y --args @zencoderai/slack-mcp-server --env SLACK_BOT_TOKEN=xoxb-YOUR_TOKEN --env SLACK_TEAM_ID=T01234567 </dev/null
+
+# 23. Figma — design frames, layout, and tokens via Framelink
+mcp-local add figma --type stdio --command npx --args -y --args figma-developer-mcp --args --stdio --env FIGMA_API_KEY=YOUR_KEY </dev/null
+
+# 24. Kubernetes — cluster pods, logs, deployments, and manifests (~/.kube/config)
+mcp-local add kubernetes --type stdio --command npx --args -y --args kubernetes-mcp-server </dev/null
+
+# 25. Grafana — dashboards, PromQL/LogQL queries, and alerts (requires uv)
+mcp-local add grafana --type stdio --command uvx --args mcp-grafana --env GRAFANA_URL=http://localhost:3000 --env GRAFANA_SERVICE_ACCOUNT_TOKEN=YOUR_TOKEN </dev/null
+```
+
+More examples (`atlassian`, `cloudflare`, `n8n`, `obsidian`, `stripe`) are in [examples/popular/](examples/popular/).
+
+---
+
 ## Command Reference
 
 ```bash
@@ -166,5 +271,5 @@ make fmt      # gofmt -w .
 
 - [AGENTS.md](AGENTS.md) — Agent workflow, paths, and limitations
 - [docs/goal-alignment-plan.md](docs/goal-alignment-plan.md) — Architecture history and future catalog TUI
-- [examples/](examples/) — Starter `config.yaml` and service snippets
+- [examples/](examples/) — Starter `config.yaml`, service snippets, and [popular MCP configs](examples/popular/)
 - **License:** MIT

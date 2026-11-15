@@ -1,0 +1,14 @@
+# Slack MCP server (channels, messages, threads, reactions, users)
+# Maintained community fork of Anthropic's original Slack reference server.
+# One-liner:
+#   mcp-local add slack --type stdio --command npx --args -y --args @zencoderai/slack-mcp-server --env SLACK_BOT_TOKEN=xoxb-YOUR_TOKEN --env SLACK_TEAM_ID=T01234567 </dev/null
+- name: slack
+  command: npx
+  type: stdio
+  args:
+    - -y
+    - "@zencoderai/slack-mcp-server"
+  env:
+    SLACK_BOT_TOKEN: xoxb-YOUR_SLACK_BOT_TOKEN
+    SLACK_TEAM_ID: T01234567
+  description: Slack workspace channels, messages, threads, and reactions

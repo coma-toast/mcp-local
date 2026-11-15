@@ -1,0 +1,10 @@
+# Official MCP Fetch server (fetch web pages and convert HTML to Markdown)
+# Requires uv (https://docs.astral.sh/uv/)
+# One-liner:
+#   mcp-local add fetch --type stdio --command uvx --args mcp-server-fetch </dev/null
+- name: fetch
+  command: uvx
+  type: stdio
+  args:
+    - mcp-server-fetch
+  description: Fetch web content and convert HTML to Markdown

@@ -1,0 +1,15 @@
+# Official Sentry MCP server (stdio via npx; works with sentry.io or self-hosted)
+# Auth: run `npx -y @sentry/mcp-server auth login` once, or set SENTRY_AUTH_TOKEN.
+# One-liner:
+#   mcp-local add sentry --type stdio --command npx --args -y --args @sentry/mcp-server --env SENTRY_AUTH_TOKEN=YOUR_TOKEN </dev/null
+#
+# Alternative hosted remote endpoint: https://mcp.sentry.dev/mcp
+- name: sentry
+  command: npx
+  type: stdio
+  args:
+    - -y
+    - "@sentry/mcp-server"
+  env:
+    SENTRY_AUTH_TOKEN: sntryu_YOUR_SENTRY_TOKEN
+  description: Official Sentry MCP (issue triage, stack traces, release analysis)

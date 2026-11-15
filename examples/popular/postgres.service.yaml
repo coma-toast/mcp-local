@@ -1,0 +1,30 @@
+# Postgres MCP Pro (Crystal DBA) — schema inspection, explain plans, index tuning, SQL
+# Requires uv (https://docs.astral.sh/uv/) or Docker (crystaldba/postgres-mcp)
+# One-liner:
+#   mcp-local add postgres --type stdio --command uvx --args postgres-mcp --args --access-mode=restricted --env DATABASE_URI=postgresql://user:pass@localhost:5432/mydb </dev/null
+#
+# Use --access-mode=unrestricted for read/write queries.
+- name: postgres
+  command: uvx
+  type: stdio
+  args:
+    - postgres-mcp
+    - --access-mode=restricted
+  env:
+    DATABASE_URI: postgresql://user:pass@localhost:5432/mydb
+  description: PostgreSQL schema inspection, explain plans, index tuning, and SQL
+
+# Alternative: Docker stdio
+# - name: postgres
+#   command: docker
+#   type: stdio
+#   args:
+#     - run
+#     - -i
+#     - --rm
+#     - -e
+#     - DATABASE_URI
+#     - crystaldba/postgres-mcp
+#     - --access-mode=restricted
+#   env:
+#     DATABASE_URI: postgresql://user:pass@localhost:5432/mydb

@@ -1,0 +1,20 @@
+# Exa MCP server (semantic web search, code context, and research)
+# One-liner:
+#   mcp-local add exa --type http --mcp-url https://mcp.exa.ai/mcp
+#
+# Optional: pass an Exa API key via headers or use the local stdio option below.
+- name: exa
+  type: http
+  mcp_url: https://mcp.exa.ai/mcp
+  description: Semantic web search, content fetching, and research (Exa)
+
+# Alternative: local stdio server
+# - name: exa
+#   command: npx
+#   type: stdio
+#   args:
+#     - -y
+#     - exa-mcp-server
+#   env:
+#     EXA_API_KEY: YOUR_EXA_API_KEY
+#   description: Exa semantic web search (local stdio)

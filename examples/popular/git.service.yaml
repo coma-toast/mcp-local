@@ -1,0 +1,12 @@
+# Official MCP Git server (read, search, diff, and manipulate Git repositories)
+# Requires uv (https://docs.astral.sh/uv/)
+# One-liner:
+#   mcp-local add git --type stdio --command uvx --args mcp-server-git </dev/null
+#
+# Optional: pass "--repository", "/path/to/repo" in args to restrict to one repo.
+- name: git
+  command: uvx
+  type: stdio
+  args:
+    - mcp-server-git
+  description: Git status, diff, log, and repository operations

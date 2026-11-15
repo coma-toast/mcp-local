@@ -1,0 +1,13 @@
+# Official Brave Search MCP server (web, local, image, video, and news search)
+# Requires a Brave Search API key: https://brave.com/search/api/
+# One-liner:
+#   mcp-local add brave-search --type stdio --command npx --args -y --args @brave/brave-search-mcp-server --env BRAVE_API_KEY=YOUR_KEY </dev/null
+- name: brave-search
+  command: npx
+  type: stdio
+  args:
+    - -y
+    - "@brave/brave-search-mcp-server"
+  env:
+    BRAVE_API_KEY: YOUR_BRAVE_API_KEY
+  description: Web, local, image, news, and video search via Brave Search API

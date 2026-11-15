@@ -1,0 +1,10 @@
+# Official MCP Sequential Thinking server (structured step-by-step reasoning)
+# One-liner:
+#   mcp-local add sequential-thinking --type stdio --command npx --args -y --args @modelcontextprotocol/server-sequential-thinking </dev/null
+- name: sequential-thinking
+  command: npx
+  type: stdio
+  args:
+    - -y
+    - "@modelcontextprotocol/server-sequential-thinking"
+  description: Dynamic step-by-step reasoning and problem-solving

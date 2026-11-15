@@ -1,0 +1,13 @@
+# Obsidian MCP server (reads/writes Markdown directly in your vault; Node.js >= 22)
+# One-liner:
+#   mcp-local add obsidian --type stdio --command npx --args -y --args obsidian-mcp@2 --args serve --args --vault --args "notes=${HOME}/Documents/Obsidian" </dev/null
+- name: obsidian
+  command: npx
+  type: stdio
+  args:
+    - -y
+    - "obsidian-mcp@2"
+    - serve
+    - --vault
+    - "notes=${HOME}/Documents/Obsidian"
+  description: Read, search, and edit local Obsidian vaults

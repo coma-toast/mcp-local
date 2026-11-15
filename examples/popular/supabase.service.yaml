@@ -1,0 +1,10 @@
+# Official Supabase MCP server (remote Streamable HTTP with OAuth)
+# One-liner:
+#   mcp-local add supabase --type http --mcp-url https://mcp.supabase.com/mcp
+#
+# For project-scoped read-only access, append query params:
+#   https://mcp.supabase.com/mcp?project_ref=YOUR_REF&read_only=true
+- name: supabase
+  type: http
+  mcp_url: https://mcp.supabase.com/mcp
+  description: Official Supabase MCP (SQL queries, migrations, logs, project management)

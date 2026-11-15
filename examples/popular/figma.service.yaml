@@ -1,0 +1,16 @@
+# Framelink Figma MCP server (Figma design frames, layout, and tokens over stdio)
+# Requires a Figma personal access token: https://www.figma.com/developers/api
+# One-liner:
+#   mcp-local add figma --type stdio --command npx --args -y --args figma-developer-mcp --args --stdio --env FIGMA_API_KEY=YOUR_KEY </dev/null
+#
+# Alternative official Figma remote endpoint (OAuth): https://mcp.figma.com/mcp
+- name: figma
+  command: npx
+  type: stdio
+  args:
+    - -y
+    - figma-developer-mcp
+    - --stdio
+  env:
+    FIGMA_API_KEY: figd_YOUR_FIGMA_KEY
+  description: Figma design files, frames, styles, and layout data (Framelink)

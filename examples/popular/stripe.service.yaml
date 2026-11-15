@@ -1,0 +1,7 @@
+# Official Stripe MCP server (remote Streamable HTTP with OAuth)
+# One-liner:
+#   mcp-local add stripe --type http --mcp-url https://mcp.stripe.com
+- name: stripe
+  type: http
+  mcp_url: https://mcp.stripe.com
+  description: Official Stripe MCP (customers, invoices, subscriptions, docs)

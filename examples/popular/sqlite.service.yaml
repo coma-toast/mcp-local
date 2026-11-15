@@ -1,0 +1,12 @@
+# SQLite MCP server (query SQLite databases, inspect schemas, analyze data)
+# Requires uv (https://docs.astral.sh/uv/)
+# One-liner:
+#   mcp-local add sqlite --type stdio --command uvx --args mcp-server-sqlite --args --db-path --args "${HOME}/data.db" </dev/null
+- name: sqlite
+  command: uvx
+  type: stdio
+  args:
+    - mcp-server-sqlite
+    - --db-path
+    - "${HOME}/data.db"
+  description: SQLite database querying, schema inspection, and analysis

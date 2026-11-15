@@ -1,0 +1,7 @@
+# Official Linear MCP server (remote Streamable HTTP with OAuth)
+# One-liner:
+#   mcp-local add linear --type http --mcp-url https://mcp.linear.app/mcp
+- name: linear
+  type: http
+  mcp_url: https://mcp.linear.app/mcp
+  description: Official Linear MCP (issues, projects, cycles, comments, teams)

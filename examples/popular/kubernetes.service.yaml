@@ -1,0 +1,10 @@
+# Kubernetes & OpenShift MCP server (uses your current ~/.kube/config context)
+# One-liner:
+#   mcp-local add kubernetes --type stdio --command npx --args -y --args kubernetes-mcp-server </dev/null
+- name: kubernetes
+  command: npx
+  type: stdio
+  args:
+    - -y
+    - kubernetes-mcp-server
+  description: Kubernetes and OpenShift cluster inspection, pods, logs, and manifests

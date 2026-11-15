@@ -1,0 +1,19 @@
+# Official Notion MCP server (remote Streamable HTTP with OAuth)
+# One-liner:
+#   mcp-local add notion --type http --mcp-url https://mcp.notion.com/mcp
+#
+# Alternative self-hosted stdio option is commented below.
+- name: notion
+  type: http
+  mcp_url: https://mcp.notion.com/mcp
+  description: Official Notion MCP (workspace search, Markdown page read and edit)
+
+# Alternative: legacy local stdio server (requires NOTION_TOKEN)
+# - name: notion
+#   command: npx
+#   type: stdio
+#   args:
+#     - -y
+#     - "@notionhq/notion-mcp-server"
+#   env:
+#     NOTION_TOKEN: ntn_YOUR_NOTION_TOKEN
