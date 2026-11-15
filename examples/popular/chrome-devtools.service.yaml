@@ -1,0 +1,12 @@
+# Google Chrome DevTools MCP server (inspect live Chrome console, network, DOM, traces)
+# One-liner:
+#   mcp-local add chrome-devtools --type stdio --command npx --args -y --args chrome-devtools-mcp </dev/null
+#
+# Optional: add "--no-usage-statistics" to args to opt out of telemetry.
+- name: chrome-devtools
+  command: npx
+  type: stdio
+  args:
+    - -y
+    - chrome-devtools-mcp
+  description: Inspect, debug, and profile live Chrome via DevTools

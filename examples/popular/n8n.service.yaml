@@ -1,0 +1,17 @@
+# n8n MCP server (n8n node docs, workflow building, and optional live instance API)
+# One-liner:
+#   mcp-local add n8n --type stdio --command npx --args -y --args n8n-mcp --env MCP_MODE=stdio --env LOG_LEVEL=error --env DISABLE_CONSOLE_OUTPUT=true </dev/null
+- name: n8n
+  command: npx
+  type: stdio
+  args:
+    - -y
+    - n8n-mcp
+  env:
+    MCP_MODE: stdio
+    LOG_LEVEL: error
+    DISABLE_CONSOLE_OUTPUT: "true"
+    # Optional: connect to a live n8n instance
+    # N8N_API_URL: https://n8n.example.com
+    # N8N_API_KEY: YOUR_N8N_API_KEY
+  description: n8n node catalog, workflow validation, and instance management

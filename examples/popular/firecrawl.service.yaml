@@ -1,0 +1,13 @@
+# Firecrawl MCP server (scrape, crawl, map, and search the web to Markdown)
+# Requires a Firecrawl API key: https://www.firecrawl.dev/
+# One-liner:
+#   mcp-local add firecrawl --type stdio --command npx --args -y --args firecrawl-mcp --env FIRECRAWL_API_KEY=YOUR_KEY </dev/null
+- name: firecrawl
+  command: npx
+  type: stdio
+  args:
+    - -y
+    - firecrawl-mcp
+  env:
+    FIRECRAWL_API_KEY: YOUR_FIRECRAWL_API_KEY
+  description: Web scraping, crawling, and search returning clean Markdown

@@ -1,0 +1,10 @@
+# Desktop Commander MCP server (terminal commands, processes, and file editing)
+# One-liner:
+#   mcp-local add desktop-commander --type stdio --command npx --args -y --args @wonderwhy-er/desktop-commander </dev/null
+- name: desktop-commander
+  command: npx
+  type: stdio
+  args:
+    - -y
+    - "@wonderwhy-er/desktop-commander"
+  description: Terminal command execution, process management, and file editing

@@ -1,0 +1,16 @@
+# Cloudflare Docs MCP server (remote Streamable HTTP, no auth required)
+# One-liner:
+#   mcp-local add cloudflare --type http --mcp-url https://docs.mcp.cloudflare.com/mcp
+#
+# For Cloudflare account management (Workers, KV, R2, D1) via local Wrangler auth:
+# - name: cloudflare-api
+#   command: npx
+#   type: stdio
+#   args:
+#     - -y
+#     - "@cloudflare/mcp-server-cloudflare"
+#     - run
+- name: cloudflare
+  type: http
+  mcp_url: https://docs.mcp.cloudflare.com/mcp
+  description: Official Cloudflare documentation MCP server

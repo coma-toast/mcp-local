@@ -1,0 +1,27 @@
+# Official GitHub MCP server (remote Streamable HTTP with OAuth or PAT)
+# One-liner:
+#   mcp-local add github --type http --mcp-url https://api.githubcopilot.com/mcp/
+#
+# If your client doesn't use OAuth, add a Personal Access Token header below,
+# or use the local Docker stdio option at the bottom of this file.
+- name: github
+  type: http
+  mcp_url: https://api.githubcopilot.com/mcp/
+  description: Official GitHub MCP server (repos, PRs, issues, code search, Actions)
+  # headers:
+  #   Authorization: Bearer ghp_YOUR_GITHUB_PAT
+
+# Alternative: local Docker stdio server
+# - name: github
+#   command: docker
+#   type: stdio
+#   args:
+#     - run
+#     - -i
+#     - --rm
+#     - -e
+#     - GITHUB_PERSONAL_ACCESS_TOKEN
+#     - ghcr.io/github/github-mcp-server
+#   env:
+#     GITHUB_PERSONAL_ACCESS_TOKEN: ghp_YOUR_GITHUB_PAT
+#   description: Official GitHub MCP server (Docker stdio)

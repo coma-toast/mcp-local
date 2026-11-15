@@ -1,0 +1,10 @@
+# Official MCP Time server (current time and IANA timezone conversions)
+# Requires uv (https://docs.astral.sh/uv/)
+# One-liner:
+#   mcp-local add time --type stdio --command uvx --args mcp-server-time </dev/null
+- name: time
+  command: uvx
+  type: stdio
+  args:
+    - mcp-server-time
+  description: Current time lookup and IANA timezone conversion

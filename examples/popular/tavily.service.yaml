@@ -1,0 +1,15 @@
+# Tavily MCP server (AI-native web search, extraction, crawl, and site map)
+# Requires a Tavily API key: https://www.tavily.com/
+# One-liner:
+#   mcp-local add tavily --type stdio --command npx --args -y --args tavily-mcp --env TAVILY_API_KEY=YOUR_KEY </dev/null
+#
+# Alternative remote endpoint: https://mcp.tavily.com/mcp/?tavilyApiKey=YOUR_KEY
+- name: tavily
+  command: npx
+  type: stdio
+  args:
+    - -y
+    - tavily-mcp
+  env:
+    TAVILY_API_KEY: YOUR_TAVILY_API_KEY
+  description: AI-optimized web search, page extraction, and crawling (Tavily)

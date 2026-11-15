@@ -1,0 +1,12 @@
+# Upstash Context7 MCP server (up-to-date library & framework documentation)
+# One-liner:
+#   mcp-local add context7 --type stdio --command npx --args -y --args @upstash/context7-mcp </dev/null
+#
+# Optional: pass `--api-key YOUR_KEY` in args for higher rate limits, or use remote URL https://mcp.context7.com/mcp.
+- name: context7
+  command: npx
+  type: stdio
+  args:
+    - -y
+    - "@upstash/context7-mcp"
+  description: Up-to-date, version-specific library documentation (Context7)

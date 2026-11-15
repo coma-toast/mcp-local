@@ -1,0 +1,13 @@
+# Official Grafana MCP server (dashboards, PromQL/LogQL, alerts, datasources)
+# Requires uv (https://docs.astral.sh/uv/)
+# One-liner:
+#   mcp-local add grafana --type stdio --command uvx --args mcp-grafana --env GRAFANA_URL=http://localhost:3000 --env GRAFANA_SERVICE_ACCOUNT_TOKEN=YOUR_TOKEN </dev/null
+- name: grafana
+  command: uvx
+  type: stdio
+  args:
+    - mcp-grafana
+  env:
+    GRAFANA_URL: http://localhost:3000
+    GRAFANA_SERVICE_ACCOUNT_TOKEN: glsa_YOUR_SERVICE_ACCOUNT_TOKEN
+  description: Official Grafana MCP (dashboards, Prometheus/Loki queries, alerts)

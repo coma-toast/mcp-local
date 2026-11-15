@@ -1,0 +1,13 @@
+# Official MCP Filesystem server (stdio via npx)
+# One-liner:
+#   mcp-local add filesystem --type stdio --command npx --args -y --args @modelcontextprotocol/server-filesystem --args "${HOME}/projects" </dev/null
+#
+# Tip: mcp-local also has a built-in HTTP filesystem server (`type: filesystem`, `path: ~/projects`, `port: 4000`).
+- name: filesystem
+  command: npx
+  type: stdio
+  args:
+    - -y
+    - "@modelcontextprotocol/server-filesystem"
+    - "${HOME}/projects"
+  description: Official MCP filesystem server (scoped to allowed directories)

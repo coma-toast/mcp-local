@@ -1,0 +1,12 @@
+# Official MCP Memory server (persistent knowledge graph across sessions)
+# One-liner:
+#   mcp-local add memory --type stdio --command npx --args -y --args @modelcontextprotocol/server-memory </dev/null
+- name: memory
+  command: npx
+  type: stdio
+  args:
+    - -y
+    - "@modelcontextprotocol/server-memory"
+  description: Persistent knowledge-graph memory across chats
+  # env:
+  #   MEMORY_FILE_PATH: "${HOME}/.mcp-local/memory.jsonl"

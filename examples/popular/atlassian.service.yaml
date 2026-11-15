@@ -1,0 +1,7 @@
+# Official Atlassian Rovo MCP server (Jira issues and Confluence pages via OAuth)
+# One-liner:
+#   mcp-local add atlassian --type http --mcp-url https://mcp.atlassian.com/v1/mcp
+- name: atlassian
+  type: http
+  mcp_url: https://mcp.atlassian.com/v1/mcp
+  description: Official Atlassian MCP (Jira issues, JQL, Confluence search and pages)

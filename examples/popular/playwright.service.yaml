@@ -1,0 +1,10 @@
+# Microsoft Playwright MCP server (browser automation via accessibility snapshots)
+# One-liner:
+#   mcp-local add playwright --type stdio --command npx --args -y --args @playwright/mcp </dev/null
+- name: playwright
+  command: npx
+  type: stdio
+  args:
+    - -y
+    - "@playwright/mcp"
+  description: Browser automation and web testing via Playwright
