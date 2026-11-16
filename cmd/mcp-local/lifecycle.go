@@ -42,12 +42,6 @@ func failures(cmd *cobra.Command, n int, verb string) error {
 	return fmt.Errorf("%d service(s) failed to %s", n, verb)
 }
 
-func warnDeregister(name string, err error) {
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "  ⚠️  %s: deregister failed:\n%s\n", name, indent(err.Error()))
-	}
-}
-
 func indent(s string) string {
 	return "    " + strings.ReplaceAll(s, "\n", "\n    ")
 }
@@ -228,12 +222,8 @@ func runningPID(name string, svc config.ServiceConfig) (int, bool) {
 	return 0, false
 }
 
-// startOne starts a service and prints its status line. Remote and stdio services are
+// startOneTo starts a service and prints its status line. Remote and stdio services are
 // only registered: there is nothing to run, or the agents launch them on demand.
-func startOne(name string, svc config.ServiceConfig, build bool, errOut io.Writer) error {
-	return startOneTo(name, svc, build, os.Stdout, errOut)
-}
-
 func startOneTo(name string, svc config.ServiceConfig, build bool, out, errOut io.Writer) error {
 	mode := process.ModeOf(svc)
 	if mode != process.Embedded && strings.TrimSpace(svc.Command) == "" && strings.TrimSpace(svc.MCPURL) == "" {
