@@ -238,10 +238,10 @@ func LoadConfig() (*ManagerConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	return parseConfig(data)
+	return ParseConfig(data)
 }
 
-func parseConfig(data []byte) (*ManagerConfig, error) {
+func ParseConfig(data []byte) (*ManagerConfig, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, err
@@ -259,6 +259,15 @@ func parseConfig(data []byte) (*ManagerConfig, error) {
 		ExpandService(&cfg.Services[i])
 	}
 	return &cfg, nil
+}
+
+// RawService returns the unexpanded service definition as written in config.yaml, if present.
+func (m *ManagerConfig) RawService(name string) (ServiceConfig, bool) {
+	if m == nil || m.raw == nil {
+		return ServiceConfig{}, false
+	}
+	s, ok := m.raw[name]
+	return s, ok
 }
 
 func byName(services []ServiceConfig) map[string]ServiceConfig {

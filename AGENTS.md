@@ -213,11 +213,27 @@ make install INSTALL_DIR=~/.local/bin   # default $(PREFIX)/bin, PREFIX ?= /usr/
 
 The Makefile exports `GOWORK=off`, so run `go` commands outside make with `GOWORK=off` too if a parent directory has a `go.work`.
 
+### Web UI (React95)
+
+```bash
+mcp-local ui                     # Run in foreground (stops on Ctrl+C / SIGTERM)
+mcp-local ui --port 7831 --open  # Run in foreground and open in browser
+mcp-local ui start               # Start as background daemon service (~/.mcp-local/pids/ui.pid)
+mcp-local ui stop                # Stop background service
+mcp-local ui restart             # Restart background service (remembers --host/--port/--allow-remote)
+mcp-local ui status              # Check background service status
+mcp-local ui log                 # Tail ~/.mcp-local/logs/ui.log
+mcp-local start ui               # Top-level start/stop/restart/status/log/open also accept "ui"
+make ui                          # Rebuild web/ (React95 + Vite) into internal/webui/dist
+```
+
 Layout:
 
-- `cmd/mcp-local/` — CLI (lifecycle, tools, register)
+- `cmd/mcp-local/` — CLI (lifecycle, tools, register, ui)
 - `internal/mgr/` — config, process, agents (opencode, cursor, claudedesktop), asttools
 - `internal/tui/` — config wizard, tool manager
+- `internal/webui/` — HTTP API server + embedded React95 frontend (`dist/`)
+- `web/` — React95 + TypeScript + Vite source
 - `examples/` — starter and service snippets
 
 **Git:** Only commit when the user asks. Do not push unless asked.

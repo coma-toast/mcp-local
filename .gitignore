@@ -3,3 +3,4 @@
 /cmd/mcp-local/mcp-local
 .DS_Store
 /dist/
+/web/node_modules/

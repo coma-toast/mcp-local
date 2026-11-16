@@ -57,6 +57,7 @@ For any other MCP-capable IDE (Antigravity, Windsurf, Zed, etc.), point a stdio 
 - **stdio ↔ HTTP Bridge (`mcp-local bridge <url>`):** Spec `2025-06-18` relay with session/protocol headers, SSE + GET notification stream reconnect (`Last-Event-ID`), transparent `404` session re-initialization, `--header`, and idle `--timeout` (`60s` default).
 - **Embedded Filesystem MCP (`type: filesystem`):** Serves `path` over Streamable HTTP (`/mcp`, `/health`) bound to `127.0.0.1:<port>` with 6 tools (`read_file`, `write_file`, `list_directory`, `search_files`, `get_file_info`, `create_directory`). Enforces localhost `Host`/`Origin`, `application/json` `POST`s, symlink-safe path resolution, 10 MiB body/read caps, and a 1,000-match search cap.
 - **Tool & Tier Management (`ast-context-cache`):** `tools sync`, `tools` TUI, `tools apply` (`~/.astcache/tools.json`), `json tools`, plus `AST_MCP_TIER` / `AST_MCP_CODE_MODE` / `AST_MCP_TOOLS_CONFIG` injection on start (restart after changes).
+- **React95 Web UI (`mcp-local ui`):** Retro Windows 95 desktop control plane (`http://127.0.0.1:7831`) embedded directly in the binary for managing `config.yaml`, service lifecycles, agent targets, AST tool tiers, live SSE logs, doctor checks, and IDE imports.
 - **Config Management:** First-run setup wizard TUI, `add`, `edit` (TUI), `remove`, `config` (`$EDITOR`/`$VISUAL` with flag support), `validate`, `import --from opencode|cursor|claude`, `list`.
 
 ---
@@ -65,6 +66,7 @@ For any other MCP-capable IDE (Antigravity, Windsurf, Zed, etc.), point a stdio 
 
 ```bash
 # Lifecycle & Monitoring
+mcp-local ui [--port 7831] [--open]         # Launch embedded React95 Web UI
 mcp-local start [service | --all]           # Start & register with agents
 mcp-local stop [service | --all]            # Stop & deregister (--deregister=false to keep)
 mcp-local restart [service | --all]         # Build, stop, start, register

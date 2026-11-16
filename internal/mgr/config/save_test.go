@@ -169,11 +169,11 @@ func TestSaveConfigWithoutLoadMergesIntoFile(t *testing.T) {
 }
 
 func TestLoadConfigAgentsPresence(t *testing.T) {
-	cfg, err := parseConfig([]byte("services: []\n"))
+	cfg, err := ParseConfig([]byte("services: []\n"))
 	if err != nil || cfg.Agents != nil {
 		t.Fatalf("no agents key: %+v, %v", cfg.Agents, err)
 	}
-	cfg, err = parseConfig([]byte("agents:\n  opencode: false\n"))
+	cfg, err = ParseConfig([]byte("agents:\n  opencode: false\n"))
 	if err != nil || cfg.Agents == nil || cfg.Agents.OpenCode {
 		t.Fatalf("agents key present: %+v, %v", cfg.Agents, err)
 	}

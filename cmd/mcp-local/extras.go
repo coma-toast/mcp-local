@@ -41,6 +41,7 @@ func addCommands() {
 	addDoctor()
 	addUpdate()
 	addMCP()
+	addUI()
 
 	rootCmd.AddCommand(cmdList())
 
@@ -50,8 +51,12 @@ func addCommands() {
 		Short: "Live status table (q to quit); use --plain for one-shot",
 		Example: `  mcp-local status
   mcp-local status --plain
-  mcp-local status my-server`,
+  mcp-local status my-server
+  mcp-local status ui`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 1 && isUIServiceTarget(args[0]) {
+				return printUIStatus(cmd.OutOrStdout())
+			}
 			cfg := mustConfig()
 			filter := ""
 			if len(args) > 0 {
@@ -168,11 +173,15 @@ func cmdList() *cobra.Command {
 
 func cmdLog() *cobra.Command {
 	return &cobra.Command{
-		Use:     "log <service>",
-		Short:   "Tail the service log file",
-		Args:    cobra.ExactArgs(1),
-		Example: `  mcp-local log my-server`,
+		Use:   "log <service>",
+		Short: "Tail the service log file",
+		Args:  cobra.ExactArgs(1),
+		Example: `  mcp-local log my-server
+  mcp-local log ui`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if isUIServiceTarget(args[0]) {
+				return tailUILog(os.Stdout, os.Stderr)
+			}
 			cfg := mustConfig()
 			svc, err := cfg.ServiceNamed(args[0])
 			if err != nil {
@@ -189,11 +198,15 @@ func cmdLog() *cobra.Command {
 
 func cmdOpen() *cobra.Command {
 	return &cobra.Command{
-		Use:     "open <service>",
-		Short:   "Open dashboard_url in a browser",
-		Args:    cobra.ExactArgs(1),
-		Example: `  mcp-local open my-server`,
+		Use:   "open <service>",
+		Short: "Open dashboard_url in a browser",
+		Args:  cobra.ExactArgs(1),
+		Example: `  mcp-local open my-server
+  mcp-local open ui`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if isUIServiceTarget(args[0]) {
+				return openURLInBrowser(uiDisplayURL(loadUIConfigState()))
+			}
 			cfg := mustConfig()
 			svc, err := cfg.ServiceNamed(args[0])
 			if err != nil {
