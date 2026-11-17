@@ -42,12 +42,6 @@ func failures(cmd *cobra.Command, n int, verb string) error {
 	return fmt.Errorf("%d service(s) failed to %s", n, verb)
 }
 
-func warnDeregister(name string, err error) {
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "  ⚠️  %s: deregister failed:\n%s\n", name, indent(err.Error()))
-	}
-}
-
 func indent(s string) string {
 	return "    " + strings.ReplaceAll(s, "\n", "\n    ")
 }
@@ -174,6 +168,10 @@ func tailLines(path string, n int) ([]string, error) {
 // stopServiceNamed stops one service and prints its ✅/⏭️ line. It returns an error, for
 // the caller to print, unless the process is gone and its port is free.
 func stopServiceNamed(cfg *config.ManagerConfig, name string, deregister bool) error {
+	return stopServiceNamedTo(cfg, name, deregister, os.Stdout, os.Stderr)
+}
+
+func stopServiceNamedTo(cfg *config.ManagerConfig, name string, deregister bool, out, errOut io.Writer) error {
 	svc, err := cfg.ServiceNamed(name)
 	if err != nil {
 		return err
@@ -197,15 +195,17 @@ func stopServiceNamed(cfg *config.ManagerConfig, name string, deregister bool) e
 		if killed {
 			verb = "killed"
 		}
-		fmt.Printf("  ✅ %s %s (pid %d)\n", name, verb, pid)
+		fmt.Fprintf(out, "  ✅ %s %s (pid %d)\n", name, verb, pid)
 	case mode == process.Remote || mode == process.Stdio:
-		fmt.Printf("  ⏭️  %s: %s service, no process to stop\n", name, mode)
+		fmt.Fprintf(out, "  ⏭️  %s: %s service, no process to stop\n", name, mode)
 	default:
-		fmt.Printf("  ⏭️  %s: not running\n", name)
+		fmt.Fprintf(out, "  ⏭️  %s: not running\n", name)
 		return nil
 	}
 	if deregister {
-		warnDeregister(name, agents.DeregisterAll(svc, agents.TargetsFromConfig(*cfg)))
+		if derr := agents.DeregisterAll(svc, agents.TargetsFromConfig(*cfg)); derr != nil {
+			fmt.Fprintf(errOut, "  ⚠️  %s: deregister failed:\n%s\n", name, indent(derr.Error()))
+		}
 	}
 	return nil
 }
@@ -222,19 +222,19 @@ func runningPID(name string, svc config.ServiceConfig) (int, bool) {
 	return 0, false
 }
 
-// startOne starts a service and prints its status line. Remote and stdio services are
+// startOneTo starts a service and prints its status line. Remote and stdio services are
 // only registered: there is nothing to run, or the agents launch them on demand.
-func startOne(name string, svc config.ServiceConfig, build bool, errOut io.Writer) error {
+func startOneTo(name string, svc config.ServiceConfig, build bool, out, errOut io.Writer) error {
 	mode := process.ModeOf(svc)
 	if mode != process.Embedded && strings.TrimSpace(svc.Command) == "" && strings.TrimSpace(svc.MCPURL) == "" {
 		return fmt.Errorf("no command or mcp_url configured")
 	}
 	if mode == process.Remote {
 		if svc.Port > 0 && !portutil.IsRunning(svc.Port) {
-			fmt.Printf("  ⚠️  %s: remote; nothing listening on port %d (start the external server), registering only\n", name, svc.Port)
+			fmt.Fprintf(out, "  ⚠️  %s: remote; nothing listening on port %d (start the external server), registering only\n", name, svc.Port)
 			return nil
 		}
-		fmt.Printf("  🌐 %s: remote (%s), registering only\n", name, svc.MCPURL)
+		fmt.Fprintf(out, "  🌐 %s: remote (%s), registering only\n", name, svc.MCPURL)
 		return nil
 	}
 	if mode != process.Stdio {
@@ -243,14 +243,14 @@ func startOne(name string, svc config.ServiceConfig, build bool, errOut io.Write
 		}
 		if pid, ok := runningPID(name, svc); ok {
 			if svc.Port > 0 && !portutil.IsRunning(svc.Port) {
-				fmt.Printf("  ⚠️  %s: already running (pid %d) but port %d isn't listening yet; `mcp-local restart %s` replaces it\n", name, pid, svc.Port, name)
+				fmt.Fprintf(out, "  ⚠️  %s: already running (pid %d) but port %d isn't listening yet; `mcp-local restart %s` replaces it\n", name, pid, svc.Port, name)
 				return nil
 			}
 			where := fmt.Sprintf("pid %d", pid)
 			if svc.Port > 0 {
 				where = fmt.Sprintf("port %d", svc.Port)
 			}
-			fmt.Printf("  ⏭️  %s: already running (%s)\n", name, where)
+			fmt.Fprintf(out, "  ⏭️  %s: already running (%s)\n", name, where)
 			return nil
 		}
 	}
@@ -260,7 +260,7 @@ func startOne(name string, svc config.ServiceConfig, build bool, errOut io.Write
 		}
 	}
 	if mode == process.Stdio {
-		fmt.Printf("  📎 %s: stdio, launched by agents on demand; registering only\n", name)
+		fmt.Fprintf(out, "  📎 %s: stdio, launched by agents on demand; registering only\n", name)
 		return nil
 	}
 	start, how := process.StartService, ""
@@ -275,7 +275,7 @@ func startOne(name string, svc config.ServiceConfig, build bool, errOut io.Write
 	if err := process.SavePID(name, p.PID); err != nil {
 		fmt.Fprintf(errOut, "  ⚠️  %s: save pid: %v\n", name, err)
 	}
-	fmt.Printf("  ✅ %s started (%sPID %d)\n", name, how, p.PID)
+	fmt.Fprintf(out, "  ✅ %s started (%sPID %d)\n", name, how, p.PID)
 	if svc.Port > 0 && !portutil.WaitForPort(svc.Port, portWait) {
 		fmt.Fprintf(errOut, "  ⚠️  %s: port %d not listening yet\n", name, svc.Port)
 		printLogTail(errOut, process.LogPath(svc), logTailLines)
@@ -285,16 +285,20 @@ func startOne(name string, svc config.ServiceConfig, build bool, errOut io.Write
 
 // startServices starts names, returning the services to register and how many failed.
 func startServices(cfg *config.ManagerConfig, names []string, build bool, errOut io.Writer) ([]config.ServiceConfig, int) {
+	return startServicesTo(cfg, names, build, os.Stdout, errOut)
+}
+
+func startServicesTo(cfg *config.ManagerConfig, names []string, build bool, out, errOut io.Writer) ([]config.ServiceConfig, int) {
 	var started []config.ServiceConfig
 	failed := 0
-	fmt.Println("🚀 Starting MCP servers...")
+	fmt.Fprintln(out, "🚀 Starting MCP servers...")
 	for _, name := range names {
 		svc, err := cfg.ServiceNamed(name)
 		if err == nil {
-			err = startOne(name, svc, build, errOut)
+			err = startOneTo(name, svc, build, out, errOut)
 		}
 		if err != nil {
-			fmt.Printf("  ❌ %s: %v\n", name, err)
+			fmt.Fprintf(out, "  ❌ %s: %v\n", name, err)
 			failed++
 			continue
 		}
@@ -306,9 +310,13 @@ func startServices(cfg *config.ManagerConfig, names []string, build bool, errOut
 // restartServices builds each service first, so a failed build leaves the running copy
 // alone, then stops it and starts it again without a second build.
 func restartServices(cfg *config.ManagerConfig, names []string, errOut io.Writer) ([]config.ServiceConfig, int) {
+	return restartServicesTo(cfg, names, os.Stdout, errOut)
+}
+
+func restartServicesTo(cfg *config.ManagerConfig, names []string, out, errOut io.Writer) ([]config.ServiceConfig, int) {
 	failed := 0
 	var ready []string
-	fmt.Println("🔁 Restarting MCP servers...")
+	fmt.Fprintln(out, "🔁 Restarting MCP servers...")
 	for _, name := range names {
 		svc, err := cfg.ServiceNamed(name)
 		if err == nil && config.ShouldBuildOnStart(svc) && process.ModeOf(svc) != process.Remote {
@@ -317,10 +325,10 @@ func restartServices(cfg *config.ManagerConfig, names []string, errOut io.Writer
 			}
 		}
 		if err == nil {
-			err = stopServiceNamed(cfg, name, false)
+			err = stopServiceNamedTo(cfg, name, false, out, errOut)
 		}
 		if err != nil {
-			fmt.Printf("  ❌ %s: %v\n", name, err)
+			fmt.Fprintf(out, "  ❌ %s: %v\n", name, err)
 			failed++
 			continue
 		}
@@ -330,27 +338,31 @@ func restartServices(cfg *config.ManagerConfig, names []string, errOut io.Writer
 		return nil, failed
 	}
 	time.Sleep(restartDelay)
-	started, n := startServices(cfg, ready, false, errOut)
+	started, n := startServicesTo(cfg, ready, false, out, errOut)
 	return started, failed + n
 }
 
 func registerStarted(cfg *config.ManagerConfig, started []config.ServiceConfig) {
+	registerStartedTo(cfg, started, os.Stdout)
+}
+
+func registerStartedTo(cfg *config.ManagerConfig, started []config.ServiceConfig, out io.Writer) {
 	if len(started) == 0 {
 		return
 	}
 	targets := agents.TargetsFromConfig(*cfg)
-	fmt.Println("\n🔄 Registering services with agents...")
+	fmt.Fprintln(out, "\n🔄 Registering services with agents...")
 	if err := agents.RegisterAll(started, targets); err != nil {
-		fmt.Printf("  ⚠️  Registration failed:\n%s\n", indent(err.Error()))
+		fmt.Fprintf(out, "  ⚠️  Registration failed:\n%s\n", indent(err.Error()))
 	} else {
 		if targets.OpenCode {
-			fmt.Println("  ✅ OpenCode registration complete")
+			fmt.Fprintln(out, "  ✅ OpenCode registration complete")
 		}
 		if targets.Cursor {
-			fmt.Println("  ✅ Cursor registration complete")
+			fmt.Fprintln(out, "  ✅ Cursor registration complete")
 		}
 		if targets.Claude {
-			fmt.Println("  ✅ Claude registration complete")
+			fmt.Fprintln(out, "  ✅ Claude registration complete")
 		}
 	}
 }
@@ -361,8 +373,13 @@ func addLifecycle() {
 		Use:   "start [service]",
 		Short: "Start service(s) and register with agents",
 		Example: `  mcp-local start my-server
+  mcp-local start ui
   mcp-local start --all`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !startAll && len(args) == 1 && isUIServiceTarget(args[0]) {
+				fmt.Fprintln(cmd.OutOrStdout(), "🚀 Starting Web UI service...")
+				return startUIService(loadUIConfigState(), false, cmd.OutOrStdout(), cmd.ErrOrStderr())
+			}
 			cfg := mustConfig()
 			names, err := resolveTargets(cfg, args, startAll, "start")
 			if err != nil {
@@ -382,9 +399,14 @@ func addLifecycle() {
 		Use:   "stop [service]",
 		Short: "Stop service(s)",
 		Example: `  mcp-local stop my-server
+  mcp-local stop ui
   mcp-local stop --all
   mcp-local stop --deregister=false my-server`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !stopAll && len(args) == 1 && isUIServiceTarget(args[0]) {
+				fmt.Fprintln(cmd.OutOrStdout(), "⏹️  Stopping Web UI service...")
+				return stopUIService(cmd.OutOrStdout(), cmd.ErrOrStderr())
+			}
 			cfg := mustConfig()
 			names, err := resolveTargets(cfg, args, stopAll, "stop")
 			if err != nil {
@@ -410,8 +432,13 @@ func addLifecycle() {
 		Use:   "restart [service]",
 		Short: "Restart service(s)",
 		Example: `  mcp-local restart my-server
+  mcp-local restart ui
   mcp-local restart --all`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !restartAll && len(args) == 1 && isUIServiceTarget(args[0]) {
+				fmt.Fprintln(cmd.OutOrStdout(), "🔁 Restarting Web UI service...")
+				return restartUIService(loadUIConfigState(), false, cmd.OutOrStdout(), cmd.ErrOrStderr())
+			}
 			cfg := mustConfig()
 			names, err := resolveTargets(cfg, args, restartAll, "restart")
 			if err != nil {

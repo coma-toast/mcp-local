@@ -13,11 +13,14 @@ LDFLAGS := -X main.version=$(or $(VERSION),dev)
 # listing unrelated modules) would otherwise break module resolution.
 export GOWORK := off
 
-.PHONY: all build install clean test check fmt
+.PHONY: all build install clean test check fmt ui
 
 all build:
 	mkdir -p $(BINDIR)
 	go build -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/mcp-local
+
+ui:
+	cd web && npm install && npm run build
 
 install: build
 	mkdir -p $(INSTALL_DIR)

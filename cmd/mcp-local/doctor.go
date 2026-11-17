@@ -68,17 +68,10 @@ type finding struct {
 	fix  func() error
 }
 
-// doctorService prints svc's report and returns how many problems remain.
-func doctorService(cfg *config.ManagerConfig, svc config.ServiceConfig, fix bool, w io.Writer) int {
-	st := runtime.CheckStatus(svc)
-	fmt.Fprintf(w, "\n🔍 %s: %s", svc.Name, st.State)
-	if st.Detail != "" && st.Detail != string(st.State) {
-		fmt.Fprintf(w, " (%s)", st.Detail)
-	}
-	fmt.Fprintln(w)
+func collectDoctorFindings(cfg *config.ManagerConfig, svc config.ServiceConfig, st runtime.ServiceStatus, out, errOut io.Writer) []finding {
 	var found []finding
 	restart := func() error {
-		if _, failed := restartServices(cfg, []string{svc.Name}, os.Stderr); failed > 0 {
+		if _, failed := restartServicesTo(cfg, []string{svc.Name}, out, errOut); failed > 0 {
 			return fmt.Errorf("restart failed")
 		}
 		return nil
@@ -113,6 +106,18 @@ func doctorService(cfg *config.ManagerConfig, svc config.ServiceConfig, fix bool
 			found = append(found, finding{fmt.Sprintf("only %.1f%% free on the volume holding %s", free, logPath), nil})
 		}
 	}
+	return found
+}
+
+// doctorService prints svc's report and returns how many problems remain.
+func doctorService(cfg *config.ManagerConfig, svc config.ServiceConfig, fix bool, w io.Writer) int {
+	st := runtime.CheckStatus(svc)
+	fmt.Fprintf(w, "\n🔍 %s: %s", svc.Name, st.State)
+	if st.Detail != "" && st.Detail != string(st.State) {
+		fmt.Fprintf(w, " (%s)", st.Detail)
+	}
+	fmt.Fprintln(w)
+	found := collectDoctorFindings(cfg, svc, st, w, os.Stderr)
 	remaining := 0
 	for _, f := range found {
 		switch {

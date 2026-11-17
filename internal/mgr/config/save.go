@@ -28,7 +28,7 @@ func SaveConfig(cfg *ManagerConfig) error {
 		if doc == nil {
 			// cfg wasn't loaded from this file (e.g. the wizard): merge into what is there,
 			// and keep its agents: block unless cfg sets one.
-			onDisk, err := parseConfig(data)
+			onDisk, err := ParseConfig(data)
 			if err != nil {
 				return fmt.Errorf("parse %s: %w", path, err)
 			}
